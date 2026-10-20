@@ -1,0 +1,10 @@
+node_modules/
+.env
+.env.*
+raspberry/
+*-firebase-adminsdk-*.json
+**/*-firebase-adminsdk-*.json
+*service-account*.json
+**/*service-account*.json
+*service_account*.json
+**/*service_account*.json

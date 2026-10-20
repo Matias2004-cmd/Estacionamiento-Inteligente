@@ -1,0 +1,18 @@
+{
+  "name": "estacionamiento-inteligente-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "API para registrar mediciones del estacionamiento en Cloud Firestore",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {
+    "firebase-admin": "^14.5.0"
+  },
+  "devDependencies": {
+    "vercel": "^64.2.0"
+  }
+}

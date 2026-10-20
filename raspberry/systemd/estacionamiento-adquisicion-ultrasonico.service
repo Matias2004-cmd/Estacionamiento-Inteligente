@@ -1,0 +1,24 @@
+[Unit]
+Description=Estacionamiento ultrasonic sensor acquisition
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=matiascatalan
+SupplementaryGroups=gpio
+WorkingDirectory=/home/matiascatalan/estacionamiento
+EnvironmentFile=/home/matiascatalan/estacionamiento/.env
+Environment=GPIOZERO_PIN_FACTORY=lgpio
+Environment=MQTT_HOST=127.0.0.1
+Environment=SENSOR_ID=puesto-1
+Environment=ECHO_GPIO=27
+Environment=TRIGGER_GPIO=17
+Environment=MAX_DISTANCE_M=2
+ExecStart=/usr/bin/python3 /home/matiascatalan/estacionamiento/servicios/adquisicion/ultrasonico.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

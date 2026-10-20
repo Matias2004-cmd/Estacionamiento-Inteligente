@@ -1,0 +1,100 @@
+services:
+  mqtt:
+    image: eclipse-mosquitto:2
+    container_name: estacionamiento-mqtt
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto/config:/mosquitto/config:ro
+      - mqtt_data:/mosquitto/data
+    ports:
+      - "127.0.0.1:1883:1883"
+    networks:
+      - estacionamiento
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mosquitto_sub -h 127.0.0.1 -t '$$SYS/broker/version' -C 1 -W 3 >/dev/null",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  procesamiento:
+    build: .
+    container_name: estacionamiento-procesamiento
+    command: ["python3", "servicios/procesamiento/procesar.py"]
+    restart: unless-stopped
+    depends_on:
+      mqtt:
+        condition: service_healthy
+    environment:
+      MQTT_HOST: mqtt
+      DEVICE_ID: raspberry-pi-1
+      DISTANCIA_LIBRE_CM: ${DISTANCIA_LIBRE_CM:-23}
+      MQTT_SAMPLE_TOPIC: sensores/ultrasonico
+      MQTT_IR_TOPIC: sensores/ir
+      MQTT_AGGREGATE_TOPIC: procesados/mediciones
+    networks:
+      - estacionamiento
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import socket; s=socket.create_connection(('mqtt',1883),3); s.close()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  sincronizacion:
+    build: .
+    container_name: estacionamiento-sincronizacion
+    command: ["python3", "servicios/sincronizacion/sincronizar.py"]
+    restart: unless-stopped
+    depends_on:
+      mqtt:
+        condition: service_healthy
+    secrets:
+      - api_token
+      - vercel_bypass
+    volumes:
+      - sync_data:/var/lib/estacionamiento
+    environment:
+      MQTT_HOST: mqtt
+      MQTT_AGGREGATE_TOPIC: procesados/mediciones
+      API_URL: https://solemne-1-ti.vercel.app/api/mediciones
+      API_TOKEN_FILE: /run/secrets/api_token
+      VERCEL_BYPASS_FILE: /run/secrets/vercel_bypass
+      OUTBOX_PATH: /var/lib/estacionamiento/outbox.sqlite3
+      BATCH_SIZE: "5"
+      BATCH_MAX_WAIT_SECONDS: "300"
+    networks:
+      - estacionamiento
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import socket; s=socket.create_connection(('mqtt',1883),3); s.close()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  estacionamiento:
+    driver: bridge
+
+volumes:
+  mqtt_data:
+  sync_data:
+
+secrets:
+  api_token:
+    file: /home/matiascatalan/.config/estacionamiento/api-token.txt
+  vercel_bypass:
+    file: /home/matiascatalan/.config/estacionamiento/vercel-bypass.txt

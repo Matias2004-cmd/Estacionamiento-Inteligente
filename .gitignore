@@ -1,0 +1,17 @@
+node_modules/
+.venv/
+.venv-*/
+.vercel/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+*-firebase-adminsdk-*.json
+**/*-firebase-adminsdk-*.json
+*service-account*.json
+**/*service-account*.json
+*service_account*.json
+**/*service_account*.json
+.vercel

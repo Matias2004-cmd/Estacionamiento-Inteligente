@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#10251e" />
+    <title>Estacionamiento inteligente | Datos en vivo</title>
+    <style>
+      :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #17221d; background: #f3f5f0; }
+      * { box-sizing: border-box; }
+      body { margin: 0; }
+      header { padding: 2rem max(1.25rem, calc((100vw - 1100px) / 2)); color: #f7faf6; background: #10251e; }
+      header p { margin: .5rem 0 0; color: #b8c9bd; }
+      main { width: min(1100px, calc(100% - 2.5rem)); margin: 1.5rem auto 4rem; }
+      .topline { display:flex; align-items:center; justify-content:space-between; gap:1rem; margin-bottom:1rem; }
+      button { border:0; border-radius:8px; padding:.7rem 1rem; color:white; background:#176b4b; font:inherit; cursor:pointer; }
+      button:disabled { opacity:.6; cursor:wait; }
+      .cards { display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; }
+      .card, section { background:white; border:1px solid #e1e8e1; border-radius:12px; box-shadow:0 3px 12px #12251e0a; }
+      .card { padding:1.2rem; }
+      .label { color:#607067; font-size:.88rem; }
+      .value { display:block; margin-top:.45rem; font-size:1.55rem; font-weight:700; }
+      section { margin-top:1rem; padding:1.2rem; }
+      h2 { margin:0 0 1rem; font-size:1.05rem; }
+      #chart { display:block; width:100%; height:250px; }
+      .table-wrap { overflow-x:auto; }
+      table { width:100%; border-collapse:collapse; text-align:left; font-size:.92rem; }
+      th,td { padding:.75rem .5rem; border-bottom:1px solid #edf0ec; white-space:nowrap; }
+      th { color:#607067; font-weight:600; }
+      .badge { display:inline-block; border-radius:999px; padding:.22rem .6rem; font-size:.78rem; font-weight:700; }
+      .LIBRE { color:#176b4b; background:#e5f4eb; } .OCUPADO { color:#9f3a24; background:#fce9e4; }
+      #message { color:#607067; min-height:1.4rem; }
+      @media(max-width:650px) { .cards { grid-template-columns:1fr; } .topline { align-items:flex-start; flex-direction:column; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Estacionamiento inteligente</h1>
+      <p>Mediciones recientes del sensor ultrasónico · datos almacenados en Firestore</p>
+    </header>
+    <main>
+      <div class="topline"><div id="message" role="status">Cargando mediciones…</div><button id="refresh" type="button">Actualizar</button></div>
+      <div class="cards">
+        <div class="card"><span class="label">Estado más reciente</span><strong class="value" id="latest-state">—</strong></div>
+        <div class="card"><span class="label">Distancia más reciente</span><strong class="value" id="latest-distance">—</strong></div>
+        <div class="card"><span class="label">Registros consultados</span><strong class="value" id="record-count">—</strong></div>
+      </div>
+      <section><h2>Distancia promedio por minuto</h2><canvas id="chart" aria-label="Gráfico de distancia promedio reciente" role="img"></canvas></section>
+      <section><h2>Últimas mediciones</h2><div class="table-wrap"><table><thead><tr><th>Periodo</th><th>Sensor</th><th>Estado</th><th>Promedio</th><th>Muestras</th></tr></thead><tbody id="rows"></tbody></table></div></section>
+    </main>
+    <script>
+      const message = document.querySelector("#message");
+      const refreshButton = document.querySelector("#refresh");
+      const formatDate = (value) => value ? new Intl.DateTimeFormat("es-CL", { dateStyle: "short", timeStyle: "short" }).format(new Date(value)) : "—";
+      function drawChart(records) {
+        const canvas = document.querySelector("#chart");
+        const ratio = window.devicePixelRatio || 1;
+        const width = canvas.clientWidth;
+        const height = 250;
+        canvas.width = width * ratio;
+        canvas.height = height * ratio;
+        const ctx = canvas.getContext("2d");
+        ctx.scale(ratio, ratio);
+        ctx.clearRect(0, 0, width, height);
+        const values = [...records].reverse().map((r) => Number(r.distanciaCm)).filter(Number.isFinite);
+        if (!values.length) return;
+        const pad = { top: 18, right: 12, bottom: 28, left: 42 };
+        const min = Math.min(0, ...values);
+        const max = Math.max(30, ...values);
+        const x = (i) => pad.left + (values.length < 2 ? 0 : i * (width - pad.left - pad.right) / (values.length - 1));
+        const y = (v) => height - pad.bottom - (v - min) * (height - pad.top - pad.bottom) / (max - min || 1);
+        ctx.strokeStyle = "#e5ebe5"; ctx.fillStyle = "#68766d"; ctx.font = "12px sans-serif";
+        for (let tick = 0; tick <= 3; tick++) { const val = max * tick / 3; ctx.beginPath(); ctx.moveTo(pad.left, y(val)); ctx.lineTo(width - pad.right, y(val)); ctx.stroke(); ctx.fillText(`${val.toFixed(0)} cm`, 2, y(val) - 4); }
+        ctx.strokeStyle = "#176b4b"; ctx.lineWidth = 2.5; ctx.beginPath();
+        values.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)));
+        ctx.stroke();
+      }
+      async function load() {
+        refreshButton.disabled = true;
+        message.textContent = "Cargando mediciones…";
+        try {
+          const response = await fetch("/api/mediciones?limit=100", { headers: { accept: "application/json" } });
+          if (!response.ok) throw new Error(`La API respondió ${response.status}`);
+          const { records } = await response.json();
+          const data = Array.isArray(records) ? records : [];
+          window.lastRecords = data;
+          const latest = data[0];
+          document.querySelector("#latest-state").innerHTML = latest ? `<span class="badge ${latest.estado}">${latest.estado}</span>` : "Sin datos";
+          document.querySelector("#latest-distance").textContent = latest ? `${Number(latest.distanciaCm).toFixed(1)} cm` : "—";
+          document.querySelector("#record-count").textContent = String(data.length);
+          document.querySelector("#rows").innerHTML = data.map((r) => `<tr><td>${formatDate(r.periodoInicio)}</td><td>${escapeHtml(r.sensorId || "—")}</td><td><span class="badge ${r.estado}">${escapeHtml(r.estado || "—")}</span></td><td>${Number(r.distanciaCm).toFixed(2)} cm</td><td>${Number.isInteger(r.muestras) ? r.muestras : "—"}</td></tr>`).join("");
+          drawChart(data);
+          message.textContent = `Actualizado: ${new Intl.DateTimeFormat("es-CL", { dateStyle: "medium", timeStyle: "short" }).format(new Date())}`;
+        } catch (error) {
+          message.textContent = `No fue posible cargar los datos: ${error.message}`;
+        } finally { refreshButton.disabled = false; }
+      }
+      function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]); }
+      refreshButton.addEventListener("click", load);
+      window.addEventListener("resize", () => drawChart(window.lastRecords || []));
+      load();
+    </script>
+  </body>
+</html>

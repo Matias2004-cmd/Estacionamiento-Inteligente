@@ -77,6 +77,8 @@ La base no guarda un documento por cada lectura de cinco segundos: guarda un res
 
 ## Plataforma web
 
+URL prevista: https://solemne-1-ti.vercel.app
+
 `index.html` es el panel publico del proyecto. Consulta los 100 agregados mas recientes mediante `GET /api/mediciones?limit=100` y muestra el estado, distancia promedio, muestras y una grafica de distancia. La misma API mantiene `POST /api/mediciones` protegido con `API_TOKEN` para recibir datos desde la Raspberry; la lectura del panel es publica y de solo lectura. La API necesita `FIREBASE_SERVICE_ACCOUNT_JSON` configurada como variable de entorno protegida en Vercel.
 
 Los documentos ya recibidos se mantienen en Firestore; no se deben copiar al repositorio GitHub. GitHub contiene el codigo y la documentacion, mientras que el informe puede incluir un CSV exportado de Firestore si se necesita entregar un respaldo de datos. Antes de compartir ese CSV, quitar cualquier dato sensible y etiquetar claramente las mediciones reales y simuladas.

@@ -125,11 +125,24 @@ module.exports = async function handler(req, res) {
       const limit = Number.isInteger(requestedLimit)
         ? Math.min(Math.max(requestedLimit, 1), 500)
         : 100;
-      const snapshot = await db
-        .collection("mediciones")
-        .orderBy("periodoInicio", "desc")
-        .limit(limit)
-        .get();
+      const from = req.query?.from;
+      const to = req.query?.to;
+      if (
+        (from !== undefined && !Number.isFinite(Date.parse(from))) ||
+        (to !== undefined && !Number.isFinite(Date.parse(to))) ||
+        (from !== undefined && to !== undefined && Date.parse(from) > Date.parse(to))
+      ) {
+        return res.status(400).json({ error: "Invalid date range" });
+      }
+
+      let query = db.collection("mediciones");
+      if (from !== undefined) {
+        query = query.where("periodoInicio", ">=", Timestamp.fromDate(new Date(from)));
+      }
+      if (to !== undefined) {
+        query = query.where("periodoInicio", "<=", Timestamp.fromDate(new Date(to)));
+      }
+      const snapshot = await query.orderBy("periodoInicio", "desc").limit(limit).get();
       const records = snapshot.docs.map((document) => {
         const data = document.data();
         return {

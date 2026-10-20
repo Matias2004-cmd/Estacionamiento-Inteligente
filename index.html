@@ -16,6 +16,9 @@
       button { border:0; border-radius:8px; padding:.7rem 1rem; color:white; background:#176b4b; font:inherit; cursor:pointer; }
       button:disabled { opacity:.6; cursor:wait; }
       .cards { display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; }
+      .filters { display:flex; flex-wrap:wrap; align-items:end; gap:1rem; }
+      .filters label { display:grid; gap:.4rem; color:#607067; font-size:.88rem; }
+      .filters input { min-height:2.6rem; border:1px solid #cbd7ce; border-radius:8px; padding:.45rem .6rem; font:inherit; color:#17221d; }
       .card, section { background:white; border:1px solid #e1e8e1; border-radius:12px; box-shadow:0 3px 12px #12251e0a; }
       .card { padding:1.2rem; }
       .label { color:#607067; font-size:.88rem; }
@@ -45,6 +48,7 @@
         <div class="card"><span class="label">Distancia más reciente</span><strong class="value" id="latest-distance">—</strong></div>
         <div class="card"><span class="label">Registros consultados</span><strong class="value" id="record-count">—</strong></div>
       </div>
+      <section><h2>Consultar histórico</h2><form id="filters" class="filters"><label>Desde<input id="from" type="datetime-local" /></label><label>Hasta<input id="to" type="datetime-local" /></label><button type="submit">Consultar rango</button></form></section>
       <section><h2>Distancia promedio por minuto</h2><canvas id="chart" aria-label="Gráfico de distancia promedio reciente" role="img"></canvas></section>
       <section><h2>Últimas mediciones</h2><div class="table-wrap"><table><thead><tr><th>Periodo</th><th>Sensor</th><th>Estado</th><th>Promedio</th><th>Muestras</th></tr></thead><tbody id="rows"></tbody></table></div></section>
     </main>
@@ -79,7 +83,12 @@
         refreshButton.disabled = true;
         message.textContent = "Cargando mediciones…";
         try {
-          const response = await fetch("/api/mediciones?limit=100", { headers: { accept: "application/json" } });
+          const params = new URLSearchParams({ limit: "100" });
+          const from = document.querySelector("#from").value;
+          const to = document.querySelector("#to").value;
+          if (from) params.set("from", new Date(from).toISOString());
+          if (to) params.set("to", new Date(to).toISOString());
+          const response = await fetch(`/api/mediciones?${params}`, { headers: { accept: "application/json" } });
           if (!response.ok) throw new Error(`La API respondió ${response.status}`);
           const { records } = await response.json();
           const data = Array.isArray(records) ? records : [];
@@ -97,6 +106,7 @@
       }
       function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]); }
       refreshButton.addEventListener("click", load);
+      document.querySelector("#filters").addEventListener("submit", (event) => { event.preventDefault(); load(); });
       window.addEventListener("resize", () => drawChart(window.lastRecords || []));
       load();
     </script>

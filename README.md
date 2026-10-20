@@ -77,9 +77,16 @@ La base no guarda un documento por cada lectura de cinco segundos: guarda un res
 
 ## Plataforma web
 
-URL prevista: https://solemne-1-ti.vercel.app
+URL publica: https://solemne-1-ti.vercel.app
 
-`index.html` es el panel publico del proyecto. Consulta los 100 agregados mas recientes mediante `GET /api/mediciones?limit=100` y muestra el estado, distancia promedio, muestras y una grafica de distancia. La misma API mantiene `POST /api/mediciones` protegido con `API_TOKEN` para recibir datos desde la Raspberry; la lectura del panel es publica y de solo lectura. La API necesita `FIREBASE_SERVICE_ACCOUNT_JSON` configurada como variable de entorno protegida en Vercel.
+`index.html` es el panel publico del proyecto. Consulta hasta 100 agregados recientes y permite filtrar historicos por fechas. Muestra el estado, distancia promedio, muestras y una grafica de distancia. La API permite una lectura publica y de solo lectura, mientras que las escrituras desde la Raspberry requieren `API_TOKEN`. `FIREBASE_SERVICE_ACCOUNT_JSON` debe estar configurada como variable de entorno protegida en Vercel.
+
+### Endpoints de la API
+
+| Metodo y ruta | Acceso | Funcion |
+| --- | --- | --- |
+| `GET /api/mediciones?limit=100&from=<ISO-8601>&to=<ISO-8601>` | Publico, solo lectura | Devuelve hasta 500 agregados ordenados por periodo descendente. `from` y `to` son opcionales e inclusivos; el panel envia ambos al consultar un rango. |
+| `POST /api/mediciones` | `Authorization: Bearer <API_TOKEN>` | Valida y guarda una medicion o un lote de hasta 100 registros en Firestore. Los lotes requieren `recordId` unico por registro. |
 
 El proyecto Vercel se conecta al repositorio GitHub en la rama `main`. Para cada cambio aceptado, revisar **Deployments** y confirmar que la implementacion de produccion quede en estado `Ready` antes de compartir la URL.
 

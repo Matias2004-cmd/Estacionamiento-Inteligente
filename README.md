@@ -85,7 +85,7 @@ URL publica: https://solemne-1-ti.vercel.app
 
 | Metodo y ruta | Acceso | Funcion |
 | --- | --- | --- |
-| `GET /api/mediciones?limit=100&from=<ISO-8601>&to=<ISO-8601>` | Publico, solo lectura | Devuelve hasta 500 agregados ordenados por periodo descendente. `from` y `to` son opcionales e inclusivos; el panel envia ambos al consultar un rango. |
+| `GET /api/mediciones?limit=100&from=<ISO-8601>&to=<ISO-8601>&cursor=<token>` | Publico, solo lectura | Devuelve una pagina de agregados ordenados por periodo descendente, con un cursor opaco para la pagina siguiente. `from` y `to` son opcionales e inclusivos; el panel solicita paginas de 100 hasta completar el rango. La API limita cada pagina a 500. |
 | `POST /api/mediciones` | `Authorization: Bearer <API_TOKEN>` | Valida y guarda una medicion o un lote de hasta 100 registros en Firestore. Los lotes requieren `recordId` unico por registro. |
 
 El proyecto Vercel se conecta al repositorio GitHub en la rama `main`. Para cada cambio aceptado, revisar **Deployments** y confirmar que la implementacion de produccion quede en estado `Ready` antes de compartir la URL.

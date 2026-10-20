@@ -1,5 +1,5 @@
 const { initializeApp, getApps, cert } = require("firebase-admin/app");
-const { getFirestore, Timestamp } = require("firebase-admin/firestore");
+const { FieldPath, getFirestore, Timestamp } = require("firebase-admin/firestore");
 const { timingSafeEqual } = require("node:crypto");
 
 function hasValidToken(req) {
@@ -127,12 +127,34 @@ module.exports = async function handler(req, res) {
         : 100;
       const from = req.query?.from;
       const to = req.query?.to;
+      const cursorToken = req.query?.cursor;
       if (
         (from !== undefined && !Number.isFinite(Date.parse(from))) ||
         (to !== undefined && !Number.isFinite(Date.parse(to))) ||
-        (from !== undefined && to !== undefined && Date.parse(from) > Date.parse(to))
+        (from !== undefined && to !== undefined && Date.parse(from) > Date.parse(to)) ||
+        (cursorToken !== undefined &&
+          (typeof cursorToken !== "string" || !/^[A-Za-z0-9_-]+$/.test(cursorToken)))
       ) {
         return res.status(400).json({ error: "Invalid date range" });
+      }
+
+      let cursor;
+      if (cursorToken !== undefined) {
+        try {
+          cursor = JSON.parse(Buffer.from(cursorToken, "base64url").toString("utf8"));
+        } catch {
+          return res.status(400).json({ error: "Invalid cursor" });
+        }
+        if (
+          !cursor ||
+          typeof cursor.periodoInicio !== "string" ||
+          !Number.isFinite(Date.parse(cursor.periodoInicio)) ||
+          typeof cursor.id !== "string" ||
+          cursor.id.length < 1 ||
+          cursor.id.length > 150
+        ) {
+          return res.status(400).json({ error: "Invalid cursor" });
+        }
       }
 
       let query = db.collection("mediciones");
@@ -142,8 +164,14 @@ module.exports = async function handler(req, res) {
       if (to !== undefined) {
         query = query.where("periodoInicio", "<=", Timestamp.fromDate(new Date(to)));
       }
-      const snapshot = await query.orderBy("periodoInicio", "desc").limit(limit).get();
-      const records = snapshot.docs.map((document) => {
+      query = query.orderBy("periodoInicio", "desc").orderBy(FieldPath.documentId(), "desc");
+      if (cursor) {
+        query = query.startAfter(Timestamp.fromDate(new Date(cursor.periodoInicio)), cursor.id);
+      }
+      const snapshot = await query.limit(limit + 1).get();
+      const hasMore = snapshot.docs.length > limit;
+      const page = snapshot.docs.slice(0, limit);
+      const records = page.map((document) => {
         const data = document.data();
         return {
           id: document.id,
@@ -152,7 +180,14 @@ module.exports = async function handler(req, res) {
           timestamp: data.timestamp?.toDate?.().toISOString() ?? null,
         };
       });
-      return res.status(200).json({ records });
+      const last = page.at(-1);
+      const nextCursor = hasMore && last
+        ? Buffer.from(JSON.stringify({
+            periodoInicio: last.get("periodoInicio").toDate().toISOString(),
+            id: last.id,
+          })).toString("base64url")
+        : null;
+      return res.status(200).json({ records, nextCursor });
     } catch (error) {
       console.error("Failed to read Firestore measurements:", error.message);
       return res.status(500).json({ error: "Could not read measurements" });

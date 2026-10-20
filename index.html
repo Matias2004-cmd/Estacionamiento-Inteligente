@@ -19,6 +19,7 @@
       .filters { display:flex; flex-wrap:wrap; align-items:end; gap:1rem; }
       .filters label { display:grid; gap:.4rem; color:#607067; font-size:.88rem; }
       .filters input { min-height:2.6rem; border:1px solid #cbd7ce; border-radius:8px; padding:.45rem .6rem; font:inherit; color:#17221d; }
+      .load-more { display:block; margin:1rem auto 0; }
       .card, section { background:white; border:1px solid #e1e8e1; border-radius:12px; box-shadow:0 3px 12px #12251e0a; }
       .card { padding:1.2rem; }
       .label { color:#607067; font-size:.88rem; }
@@ -50,11 +51,14 @@
       </div>
       <section><h2>Consultar histórico</h2><form id="filters" class="filters"><label>Desde<input id="from" type="datetime-local" /></label><label>Hasta<input id="to" type="datetime-local" /></label><button type="submit">Consultar rango</button></form></section>
       <section><h2>Distancia promedio por minuto</h2><canvas id="chart" aria-label="Gráfico de distancia promedio reciente" role="img"></canvas></section>
-      <section><h2>Últimas mediciones</h2><div class="table-wrap"><table><thead><tr><th>Periodo</th><th>Sensor</th><th>Estado</th><th>Promedio</th><th>Muestras</th></tr></thead><tbody id="rows"></tbody></table></div></section>
+      <section><h2>Mediciones</h2><div class="table-wrap"><table><thead><tr><th>Periodo</th><th>Sensor</th><th>Estado</th><th>Promedio</th><th>Muestras</th></tr></thead><tbody id="rows"></tbody></table></div><button id="load-more" class="load-more" type="button" hidden>Cargar más resultados</button></section>
     </main>
     <script>
       const message = document.querySelector("#message");
       const refreshButton = document.querySelector("#refresh");
+      const loadMoreButton = document.querySelector("#load-more");
+      let loadedRecords = [];
+      let nextCursor = null;
       const formatDate = (value) => value ? new Intl.DateTimeFormat("es-CL", { dateStyle: "short", timeStyle: "short" }).format(new Date(value)) : "—";
       function drawChart(records) {
         const canvas = document.querySelector("#chart");
@@ -79,8 +83,9 @@
         values.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)));
         ctx.stroke();
       }
-      async function load() {
+      async function load(append = false) {
         refreshButton.disabled = true;
+        loadMoreButton.disabled = true;
         message.textContent = "Cargando mediciones…";
         try {
           const params = new URLSearchParams({ limit: "100" });
@@ -88,25 +93,33 @@
           const to = document.querySelector("#to").value;
           if (from) params.set("from", new Date(from).toISOString());
           if (to) params.set("to", new Date(to).toISOString());
+          if (append && nextCursor) params.set("cursor", nextCursor);
           const response = await fetch(`/api/mediciones?${params}`, { headers: { accept: "application/json" } });
           if (!response.ok) throw new Error(`La API respondió ${response.status}`);
-          const { records } = await response.json();
-          const data = Array.isArray(records) ? records : [];
-          window.lastRecords = data;
-          const latest = data[0];
+          const result = await response.json();
+          const page = Array.isArray(result.records) ? result.records : [];
+          loadedRecords = append ? loadedRecords.concat(page) : page;
+          nextCursor = result.nextCursor || null;
+          window.lastRecords = loadedRecords;
+          const latest = loadedRecords[0];
           document.querySelector("#latest-state").innerHTML = latest ? `<span class="badge ${latest.estado}">${latest.estado}</span>` : "Sin datos";
           document.querySelector("#latest-distance").textContent = latest ? `${Number(latest.distanciaCm).toFixed(1)} cm` : "—";
-          document.querySelector("#record-count").textContent = String(data.length);
-          document.querySelector("#rows").innerHTML = data.map((r) => `<tr><td>${formatDate(r.periodoInicio)}</td><td>${escapeHtml(r.sensorId || "—")}</td><td><span class="badge ${r.estado}">${escapeHtml(r.estado || "—")}</span></td><td>${Number(r.distanciaCm).toFixed(2)} cm</td><td>${Number.isInteger(r.muestras) ? r.muestras : "—"}</td></tr>`).join("");
-          drawChart(data);
+          document.querySelector("#record-count").textContent = String(loadedRecords.length);
+          document.querySelector("#rows").innerHTML = loadedRecords.map((r) => `<tr><td>${formatDate(r.periodoInicio)}</td><td>${escapeHtml(r.sensorId || "—")}</td><td><span class="badge ${r.estado}">${escapeHtml(r.estado || "—")}</span></td><td>${Number(r.distanciaCm).toFixed(2)} cm</td><td>${Number.isInteger(r.muestras) ? r.muestras : "—"}</td></tr>`).join("");
+          drawChart(loadedRecords);
+          loadMoreButton.hidden = !nextCursor;
           message.textContent = `Actualizado: ${new Intl.DateTimeFormat("es-CL", { dateStyle: "medium", timeStyle: "short" }).format(new Date())}`;
         } catch (error) {
           message.textContent = `No fue posible cargar los datos: ${error.message}`;
-        } finally { refreshButton.disabled = false; }
+        } finally {
+          refreshButton.disabled = false;
+          loadMoreButton.disabled = false;
+        }
       }
       function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]); }
       refreshButton.addEventListener("click", load);
       document.querySelector("#filters").addEventListener("submit", (event) => { event.preventDefault(); load(); });
+      loadMoreButton.addEventListener("click", () => load(true));
       window.addEventListener("resize", () => drawChart(window.lastRecords || []));
       load();
     </script>

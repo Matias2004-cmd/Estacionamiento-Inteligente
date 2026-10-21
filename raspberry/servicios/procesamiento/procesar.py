@@ -115,6 +115,9 @@ def main():
 
     sample_topic = os.environ.get("MQTT_SAMPLE_TOPIC", "sensores/ultrasonico")
     ir_topic = os.environ.get("MQTT_IR_TOPIC", "sensores/ir")
+    device_id = os.environ.get("DEVICE_ID", "raspberry-pi-1")
+    config_topic = f"estacionamiento/config/dispositivos/{device_id}"
+    settings = {"distanciaLibreCm": free_reference}
     client = mqtt.Client(
         mqtt.CallbackAPIVersion.VERSION2,
         client_id="procesamiento",
@@ -123,14 +126,35 @@ def main():
 
     def on_connect(connected_client, _userdata, _flags, reason_code, _properties):
         if reason_code == 0:
-            connected_client.subscribe([(sample_topic, 1), (ir_topic, 1)])
-            logging.info("Subscribed to sensor MQTT topics")
+            connected_client.subscribe(
+                [(sample_topic, 1), (ir_topic, 1), (config_topic, 1)]
+            )
+            logging.info("Subscribed to sensor and configuration MQTT topics")
         else:
             logging.error("MQTT connection failed: %s", reason_code)
 
     def on_message(_client, _userdata, message):
+        global candidate, candidate_count
         try:
             payload = json.loads(message.payload)
+            if message.topic == config_topic:
+                new_reference = payload.get("distanciaLibreCm")
+                if (
+                    not isinstance(new_reference, (int, float))
+                    or isinstance(new_reference, bool)
+                    or not 5 <= new_reference <= 200
+                ):
+                    raise ValueError("Invalid remote free-distance reference")
+                with lock:
+                    if settings["distanciaLibreCm"] != float(new_reference):
+                        candidate = state
+                        candidate_count = 0
+                    settings["distanciaLibreCm"] = float(new_reference)
+                    logging.info(
+                        "Remote free-distance reference updated to %.1f cm",
+                        new_reference,
+                    )
+                return
             timestamp_text = payload["timestamp"]
             timestamp = datetime.fromisoformat(
                 timestamp_text.replace("Z", "+00:00")
@@ -156,7 +180,7 @@ def main():
                         logging.warning("Invalid ultrasonic reading ignored")
                         return
                     current["distances"].append(float(distance))
-                    update_state(float(distance), free_reference)
+                    update_state(float(distance), settings["distanciaLibreCm"])
                     current["estado"] = state
                     logging.info(
                         "Live reading: %.2f cm | State: %s",

@@ -1,0 +1,34 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isMember(organizationId) {
+      return signedIn()
+        && request.auth.token.email_verified == true
+        && exists(/databases/$(database)/documents/organizaciones/$(organizationId)/miembros/$(request.auth.uid));
+    }
+
+    match /mediciones/{measurementId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /organizaciones/{organizationId}/mediciones/{measurementId} {
+      allow read: if isMember(organizationId);
+      allow write: if false;
+    }
+
+    match /organizaciones/{organizationId}/dispositivos/{deviceId} {
+      allow read: if isMember(organizationId);
+      allow write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

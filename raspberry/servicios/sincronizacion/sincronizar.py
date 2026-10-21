@@ -38,6 +38,15 @@ def main():
     token = read_secret(os.environ["API_TOKEN_FILE"])
     bypass = read_secret(os.environ["VERCEL_BYPASS_FILE"])
     api_url = os.environ["API_URL"]
+    config_url = os.environ.get(
+        "DEVICE_CONFIG_URL",
+        api_url.rsplit("/", 1)[0] + "/configuracion-dispositivo",
+    )
+    device_id = os.environ.get("DEVICE_ID", "raspberry-pi-1")
+    config_topic = f"estacionamiento/config/dispositivos/{device_id}"
+    config_poll_seconds = int(os.environ.get("DEVICE_CONFIG_POLL_SECONDS", "30"))
+    if not 1 <= config_poll_seconds <= 3600:
+        raise ValueError("DEVICE_CONFIG_POLL_SECONDS must be between 1 and 3600")
     batch_size = int(os.environ.get("BATCH_SIZE", "5"))
     max_wait = int(os.environ.get("BATCH_MAX_WAIT_SECONDS", "300"))
     if not 1 <= batch_size <= 100:
@@ -105,10 +114,32 @@ def main():
     client.connect(os.environ.get("MQTT_HOST", "mqtt"), 1883, 60)
     client.loop_start()
     logging.info("Synchronization started; outbox=%s", outbox_path)
+    next_config_poll = 0
+    current_config = None
 
     try:
         while not stopping:
             now = time.time()
+            if now >= next_config_poll:
+                try:
+                    remote_config = fetch_device_config(config_url, token, bypass)
+                    if remote_config != current_config:
+                        publish_result = client.publish(
+                            config_topic,
+                            json.dumps(remote_config),
+                            qos=1,
+                            retain=True,
+                        )
+                        if publish_result.rc != mqtt.MQTT_ERR_SUCCESS:
+                            raise RuntimeError(
+                                f"Could not publish device configuration: MQTT code {publish_result.rc}"
+                            )
+                        current_config = remote_config
+                        logging.info("Remote device configuration applied to local MQTT")
+                except (HTTPError, URLError, TimeoutError, RuntimeError, ValueError) as error:
+                    logging.warning("Could not refresh remote device configuration: %s", error)
+                next_config_poll = now + config_poll_seconds
+
             with lock:
                 rows = database.execute(
                     """
@@ -183,6 +214,34 @@ def send_batch(database, rows, api_url, token, bypass):
             )
 
 
+def fetch_device_config(config_url, token, bypass):
+    request = Request(
+        config_url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "x-vercel-protection-bypass": bypass,
+            "Accept": "application/json",
+        },
+        method="GET",
+    )
+    with urlopen(request, timeout=15) as response:
+        result = json.loads(response.read().decode("utf-8"))
+        if not isinstance(result, dict):
+            raise ValueError("Device configuration response is invalid")
+        settings = result.get("settings")
+        if (
+            response.status != 200
+            or not isinstance(settings, dict)
+            or not isinstance(settings.get("distanciaLibreCm"), (int, float))
+            or isinstance(settings.get("distanciaLibreCm"), bool)
+            or not 5 <= settings["distanciaLibreCm"] <= 200
+            or not isinstance(settings.get("intervaloMuestreoSegundos"), (int, float))
+            or isinstance(settings.get("intervaloMuestreoSegundos"), bool)
+            or not 0.1 <= settings["intervaloMuestreoSegundos"] <= 3600
+        ):
+            raise ValueError("Device configuration response is invalid")
+    return settings
+
+
 if __name__ == "__main__":
     main()
-

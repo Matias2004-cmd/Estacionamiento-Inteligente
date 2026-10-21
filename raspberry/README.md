@@ -1,40 +1,72 @@
-# Raspberry Pi data collection
+# Recolección de datos en Raspberry Pi
 
-The deployment follows the assignment's microservice flow:
+El despliegue sigue el flujo de microservicios del proyecto:
 
-- Ultrasonic and IR acquisition run as Raspberry Pi systemd services and
-  publish readings/events to the local MQTT broker.
-- Processing validates readings and creates one aggregate per minute.
-- Synchronization sends up to five minute records per API request.
-- Failed uploads remain in a persistent SQLite outbox and are retried.
+- La adquisición ultrasónica e infrarroja se ejecuta como servicios `systemd`
+  en la Raspberry Pi y publica lecturas y eventos en el broker MQTT local.
+- El procesamiento valida las lecturas y genera un agregado por minuto.
+- La sincronización envía hasta cinco registros por solicitud a la API.
+- Los envíos fallidos permanecen en una cola SQLite persistente y se reintentan.
 
-Docker Compose runs these three services on the Raspberry Pi:
-`mqtt` (broker), `procesamiento` (aggregation), and `sincronizacion` (API
-batch uploads). The two GPIO acquisition programs remain separate systemd
-services because they need direct access to the Pi's GPIO hardware; they are
-not additional Compose services.
+Docker Compose ejecuta estos tres servicios en la Raspberry Pi:
+`mqtt` (broker), `procesamiento` (agregación) y `sincronizacion` (envío de
+lotes a la API). Los dos programas de adquisición GPIO siguen siendo servicios
+`systemd` independientes porque necesitan acceso directo al hardware GPIO de
+la Pi; no son servicios adicionales de Compose.
 
-The default ultrasonic sampling interval is configurable and set to 5 seconds.
-That yields up to 12 ultrasonic readings per minute and 1,440 Firestore
-aggregate documents per day. A five-record batch normally means about 288 API
-requests per day. IR contributes event counts to the minute aggregate.
+El intervalo predeterminado de muestreo ultrasónico se puede configurar y está
+establecido en 5 segundos. Esto permite obtener hasta 12 lecturas ultrasónicas
+por minuto y 1.440 documentos agregados en Firestore por día. Los lotes de cinco
+registros representan normalmente unas 288 solicitudes a la API por día. El
+sensor IR aporta el conteo de eventos al agregado por minuto.
 
-## Configuration
+## Configuración
 
-Copy `.env.example` to `.env` on the Raspberry Pi. Set
-`DISTANCIA_LIBRE_CM` to the measured empty-space distance. Set
-`IR_ACTIVE_LEVEL` to `0` or `1` according to the already-tested IR module
-output when an object blocks it. Keep both secret files outside this folder:
+En la Raspberry Pi, copia `.env.example` a `.env`. Configura
+`DISTANCIA_LIBRE_CM` con la distancia medida cuando el espacio está vacío.
+Establece `IR_ACTIVE_LEVEL` en `0` o `1`, según el valor de salida comprobado
+del módulo IR cuando un objeto bloquea el sensor. Guarda los dos archivos con
+secretos fuera de esta carpeta:
 
 - `/home/matiascatalan/.config/estacionamiento/api-token.txt`
 - `/home/matiascatalan/.config/estacionamiento/vercel-bypass.txt`
 
-Docker Compose mounts those files as runtime secrets; their values are not
-stored in this project or in the container image.
+Docker Compose monta esos archivos como secretos durante la ejecución; sus
+valores no se guardan en este proyecto ni en la imagen del contenedor.
 
-## Installation and smoke tests
+Para vincular esta Raspberry con una organización, crea un dispositivo
+ultrasónico desde el panel privado como administrador. Copia la credencial que
+se muestra una sola vez al archivo local
+`/home/matiascatalan/.config/estacionamiento/api-token.txt`; este archivo queda
+montado como secreto `api_token`. El `DEVICE_ID` de `.env` debe coincidir
+exactamente con el ID indicado al crear el dispositivo en el panel. El token
+legado de demostración solo escribe en la colección pública. La credencial
+creada desde el panel escribe en la organización y, solo si el administrador
+marcó el dispositivo como **demo público**, también publica una copia en la
+vista pública.
 
-Run these commands from `/home/matiascatalan/estacionamiento` on the Pi:
+La sincronización consulta los ajustes del dispositivo cada
+`DEVICE_CONFIG_POLL_SECONDS` (30 segundos por defecto) y publica los cambios
+como mensaje MQTT retenido. El procesador aplica la nueva distancia de
+referencia y la adquisición ultrasónica aplica el intervalo de muestreo.
+Después de cambiar `DEVICE_ID` o actualizar las unidades de `systemd`, reinicia
+los servicios para que tomen la configuración:
+
+```sh
+sudo install -m 0644 systemd/estacionamiento-adquisicion-ultrasonico.service /etc/systemd/system/
+sudo install -m 0644 systemd/estacionamiento-adquisicion-ir.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl restart estacionamiento-adquisicion-ultrasonico.service
+sudo docker compose up -d --build procesamiento sincronizacion
+```
+
+Las alertas de ocupación/distancia y falta de lecturas recientes se muestran en
+el panel privado de la organización; no se envían por correo.
+
+## Instalación y pruebas iniciales
+
+Ejecuta estos comandos en la Pi desde
+`/home/matiascatalan/estacionamiento`:
 
 ```sh
 unzip -o ~/estacionamiento-raspberry.zip -d ~/estacionamiento
@@ -42,15 +74,15 @@ cp -n .env.example .env
 nano .env
 sudo apt update
 sudo apt install -y python3-gpiozero python3-lgpio python3-paho-mqtt
-python3 -c "import gpiozero, lgpio, paho.mqtt.client; print('GPIO and MQTT dependencies ready')"
+python3 -c "import gpiozero, lgpio, paho.mqtt.client; print('Dependencias GPIO y MQTT listas')"
 docker compose config --quiet
 sudo docker compose build
 sudo docker compose up -d mqtt procesamiento sincronizacion
 ```
 
-GPIO acquisition runs on the Pi host because the system's signature-verified
-GPIO packages provide access to `/dev/gpiochip0`. Install and start the systemd
-units:
+La adquisición GPIO se ejecuta en el sistema anfitrión de la Pi, porque los
+paquetes GPIO verificados por el sistema proporcionan acceso a
+`/dev/gpiochip0`. Instala e inicia las unidades de `systemd`:
 
 ```sh
 sudo install -m 0644 systemd/estacionamiento-adquisicion-ultrasonico.service /etc/systemd/system/
@@ -60,54 +92,60 @@ sudo systemctl enable --now estacionamiento-adquisicion-ultrasonico.service esta
 sudo systemctl status estacionamiento-adquisicion-ultrasonico.service estacionamiento-adquisicion-ir.service --no-pager
 ```
 
-Check sensor logs:
+Revisa los registros de los sensores:
 
 ```sh
 sudo journalctl -u estacionamiento-adquisicion-ir.service -n 30 --no-pager
 sudo journalctl -u estacionamiento-adquisicion-ultrasonico.service -n 30 --no-pager
 ```
 
-Block and unblock the IR sensor once. Confirm one event is logged when the
-object blocks the sensor. If it is logged when the object is removed, change
-`IR_ACTIVE_LEVEL` in `.env` from `0` to `1` (or vice versa), then restart:
+Bloquea y desbloquea el sensor IR una vez. Confirma que se registre un evento
+cuando el objeto bloquee el sensor. Si el evento se registra al retirar el
+objeto, cambia `IR_ACTIVE_LEVEL` en `.env` de `0` a `1` (o viceversa) y reinicia
+el servicio:
 
 ```sh
 sudo systemctl restart estacionamiento-adquisicion-ir.service
 ```
 
-Confirm distance readings appear, then check all three Compose services:
+Confirma que aparezcan lecturas de distancia y luego comprueba los tres
+servicios de Compose:
 
 ```sh
 sudo docker compose ps --all
 sudo docker compose logs --tail=50 mqtt procesamiento sincronizacion
 ```
 
-`docker compose ps --all` should list `estacionamiento-mqtt`,
-`estacionamiento-procesamiento`, and `estacionamiento-sincronizacion` as
-running. The broker should report `healthy`; the worker health checks verify
-that each container can reach the broker. Confirm actual data flow in the logs:
-processing should report live readings and minute aggregates, and
-synchronization should report `Uploaded batch of ... minute records`.
+`docker compose ps --all` debe mostrar
+`estacionamiento-mqtt`, `estacionamiento-procesamiento` y
+`estacionamiento-sincronizacion` en ejecución. El broker debe aparecer como
+`healthy` (saludable); las comprobaciones de los trabajadores verifican que
+cada contenedor pueda conectarse al broker. Confirma el flujo de datos en los
+registros: procesamiento debe mostrar lecturas en tiempo real y agregados por
+minuto; sincronización debe mostrar `Uploaded batch of ... minute records`
+(lote de ... registros por minuto enviado).
 
-Within five minutes, synchronization should upload a batch and Firestore
-should contain minute aggregates. The API token is sent as a Bearer token and
-the Vercel bypass uses its dedicated header. Check the persistent retry queue:
+En un plazo de cinco minutos, sincronización debería enviar un lote y Firestore
+debería contener agregados por minuto. La solicitud incluye el token de la API;
+el bypass de Vercel usa su encabezado específico. Comprueba la cola persistente
+de reintentos:
 
 ```sh
-sudo docker compose exec sincronizacion python3 -c "import sqlite3; c=sqlite3.connect('/var/lib/estacionamiento/outbox.sqlite3'); print('pending records:', c.execute('select count(*) from outbox').fetchone()[0])"
+sudo docker compose exec sincronizacion python3 -c "import sqlite3; c=sqlite3.connect('/var/lib/estacionamiento/outbox.sqlite3'); print('registros pendientes:', c.execute('select count(*) from outbox').fetchone()[0])"
 ```
 
-An empty retry queue is expected when connectivity is working. Do not start
-the seven-day measurement until these checks succeed.
+Si la conectividad funciona, lo esperado es que la cola de reintentos esté
+vacía. No comiences la medición de siete días hasta que estas comprobaciones
+sean satisfactorias.
 
-## Service status and recovery
+## Estado y recuperación de los servicios
 
-Compose containers use `restart: unless-stopped`, and the GPIO systemd
-services use `Restart=on-failure`; they restart after a crash or Pi reboot
-unless they were explicitly stopped.
+Los contenedores de Compose usan `restart: unless-stopped` y los servicios
+GPIO de `systemd` usan `Restart=on-failure`. Se reinician después de un fallo o
+del reinicio de la Pi, salvo que se hayan detenido explícitamente.
 
-Run these commands from the deployment directory on the Pi to check the three
-containers and follow their logs:
+Ejecuta estos comandos desde la carpeta del despliegue en la Pi para comprobar
+los tres contenedores y seguir sus registros:
 
 ```sh
 sudo docker compose ps --all
@@ -115,8 +153,8 @@ sudo docker compose logs --tail=100 mqtt procesamiento sincronizacion
 sudo docker compose logs --follow procesamiento sincronizacion
 ```
 
-For an unhealthy or stopped service, inspect its logs first, then restart only
-that service:
+Si un servicio está detenido o no está saludable, primero revisa sus registros
+y luego reinicia únicamente ese servicio:
 
 ```sh
 sudo docker compose restart mqtt
@@ -124,15 +162,15 @@ sudo docker compose restart procesamiento
 sudo docker compose restart sincronizacion
 ```
 
-After changing application code or the Dockerfile, rebuild and recreate the
-affected worker:
+Después de modificar el código de la aplicación o el Dockerfile, vuelve a
+generar la imagen y recrea el trabajador afectado:
 
 ```sh
 sudo docker compose up -d --build procesamiento sincronizacion
 ```
 
-To start or recover the complete Compose deployment, validate the configuration
-and bring all three services up:
+Para iniciar o recuperar todo el despliegue de Compose, valida la configuración
+y levanta los tres servicios:
 
 ```sh
 sudo docker compose config --quiet
@@ -140,8 +178,8 @@ sudo docker compose up -d
 sudo docker compose ps --all
 ```
 
-The sensor acquisition services are managed independently. Check and recover
-them with systemd:
+Los servicios de adquisición de los sensores se administran por separado.
+Comprueba su estado y recupéralos con `systemd`:
 
 ```sh
 sudo systemctl status estacionamiento-adquisicion-ir.service estacionamiento-adquisicion-ultrasonico.service --no-pager
@@ -149,15 +187,16 @@ sudo systemctl restart estacionamiento-adquisicion-ir.service
 sudo systemctl restart estacionamiento-adquisicion-ultrasonico.service
 ```
 
-If API connectivity fails, synchronization retains queued records in the
-persistent `sync_data` volume and retries automatically. Check its logs and
-pending count, restore connectivity, and restart `sincronizacion` if needed.
-Do not remove Compose volumes when recovering: deleting `sync_data` discards
-records waiting to be uploaded, and deleting `mqtt_data` removes broker
-persistence.
+Si falla la conexión con la API, sincronización conserva los registros
+pendientes en el volumen persistente `sync_data` y los reintenta
+automáticamente. Revisa sus registros y el número de registros pendientes,
+restablece la conexión y, si hace falta, reinicia `sincronizacion`. No elimines
+los volúmenes de Compose durante la recuperación: borrar `sync_data` descarta
+los registros pendientes de envío y borrar `mqtt_data` elimina la persistencia
+del broker.
 
-After the sensor and upload checks succeed, record the start time and check
-the running services:
+Cuando las comprobaciones de los sensores y de los envíos sean satisfactorias,
+anota la hora de inicio y comprueba los servicios en ejecución:
 
 ```sh
 sudo docker compose ps
@@ -165,6 +204,7 @@ sudo systemctl is-active estacionamiento-adquisicion-ultrasonico.service estacio
 date -Is
 ```
 
-For the required continuous measurement, keep the Pi powered, connected to
-the network, and running for at least seven days. Check the Firestore
-`mediciones` collection and compare its usage with the estimates above.
+Para completar la medición continua requerida, mantén la Pi encendida,
+conectada a la red y en funcionamiento durante al menos siete días. Revisa la
+colección `mediciones` de Firestore y compara su uso con las estimaciones
+anteriores.

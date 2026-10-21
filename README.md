@@ -77,11 +77,34 @@ La base no guarda un documento por cada lectura de cinco segundos: guarda un res
 
 ## Plataforma web
 
-URL publica: https://solemne-1-ti.vercel.app
+URL pública: https://solemne-1-ti.vercel.app
 
-`index.html` es el panel publico del proyecto. Consulta los agregados recientes y permite filtrar historicos por fecha y hora. Muestra estado, distancia promedio, cantidad de muestras y una grafica. La consulta empieza con 100 resultados y el boton **Cargar mas resultados** obtiene paginas siguientes hasta completar el rango elegido. La API permite lectura publica y de solo lectura; las escrituras desde la Raspberry requieren `API_TOKEN`. `FIREBASE_SERVICE_ACCOUNT_JSON` debe mantenerse como variable de entorno protegida en Vercel.
+`index.html` conserva el panel público de demostración, con el estado y la
+distancia más recientes actualizados en vivo, y filtros con histórico
+paginado. El panel privado añade inicio de sesión con Firebase Authentication
+y una suscripción en tiempo real a las mediciones de cada organización. Los
+roles son `admin` (administra organizaciones, dispositivos,
+configuración y usuarios) y `operator` (consulta el panel, los históricos y
+las alertas).
 
-El usuario confirmo que el panel publico carga datos reales de Firestore en produccion el 20 de octubre de 2026. La version verificada mostro los 100 agregados mas recientes. La paginacion del historico se incorporo despues; confirmar que la ultima implementacion de Vercel este en estado `Ready` antes de afirmar que esa version esta publicada.
+Los datos de cada organización se guardan en
+`organizaciones/{organizacionId}` y no se incluyen por defecto en la colección
+pública de demostración `mediciones`. Un administrador puede marcar
+explícitamente un dispositivo para publicar allí una copia del flujo de demo;
+los demás dispositivos permanecen privados. La API valida Firebase ID tokens y membresía de
+organización; `firestore.rules` permite lecturas en tiempo real únicamente a
+miembros y bloquea escrituras desde el navegador. Las alertas del panel
+incluyen ocupación/distancia configurada y ausencia de lecturas recientes.
+El umbral de ausencia se valida contra el intervalo del dispositivo más seis
+minutos de margen para la agregación y el envío por lotes, evitando alertas
+prematuras por el funcionamiento normal de la cola.
+Los ajustes de distancia libre e intervalo se sincronizan con la Raspberry
+cada 30 segundos por medio de la API y MQTT local.
+
+El panel público con datos reales se verificó en producción el 20 de octubre
+de 2026. La implementación actual de estas funciones nuevas **aún debe
+desplegarse y verificarse en Vercel**, y las reglas deben publicarse en
+Firestore antes de habilitar el acceso privado.
 
 ### Endpoints de la API
 
@@ -89,6 +112,40 @@ El usuario confirmo que el panel publico carga datos reales de Firestore en prod
 | --- | --- | --- |
 | `GET /api/mediciones?limit=100&from=<ISO-8601>&to=<ISO-8601>&cursor=<token>` | Publico, solo lectura | Devuelve una pagina de agregados ordenados por periodo descendente, con un cursor opaco para la pagina siguiente. `from` y `to` son opcionales e inclusivos; el panel solicita paginas de 100 hasta completar el rango. La API limita cada pagina a 500. |
 | `POST /api/mediciones` | `Authorization: Bearer <API_TOKEN>` | Valida y guarda una medicion o un lote de hasta 100 registros en Firestore. Los lotes requieren `recordId` unico por registro. |
+
+Rutas adicionales para el panel privado:
+
+| Método y ruta | Acceso | Función |
+| --- | --- | --- |
+| `GET /api/configuracion-publica` | Público | Devuelve la configuración web pública requerida por Firebase Authentication. |
+| `GET /api/sesion` | Firebase ID token | Devuelve las organizaciones y roles de la cuenta autenticada. |
+| `GET /api/mediciones?scope=organizacion&organizacion=<id>&...` | ID token y membresía | Consulta históricos paginados de esa organización. |
+| `POST /api/mediciones` | Credencial de dispositivo | Guarda los datos en la organización asociada y crea una copia en el demo público solo si el administrador marcó el dispositivo para publicarlo. `API_TOKEN` legado mantiene la colección pública de demostración. |
+| `POST /api/iniciar-organizacion` | Administrador inicial verificado | Inicializa una vez la organización indicada por las variables `BOOTSTRAP_*`. |
+| `POST /api/organizaciones` | Administrador | Crea otra organización y agrega al administrador que la creó. |
+| `GET/POST/PATCH/DELETE /api/dispositivos` | Miembro para lectura; administrador para cambios | Administra dispositivos, credenciales y configuración. El secreto solo se muestra al crearlo. |
+| `GET/POST/PATCH/DELETE /api/usuarios` | Administrador | Administra miembros y asigna roles. |
+| `GET /api/configuracion-dispositivo` | Credencial de dispositivo | Entrega al dispositivo su configuración remota. |
+
+### Activación del acceso privado
+
+1. Habilita **Correo electrónico y contraseña** en Firebase Authentication y
+   agrega `solemne-1-ti.vercel.app` a los dominios autorizados.
+2. Configura en Vercel `FIREBASE_PROJECT_ID`, `FIREBASE_WEB_API_KEY` y
+   `FIREBASE_SERVICE_ACCOUNT_JSON`; `FIREBASE_AUTH_DOMAIN` es opcional. La
+   cuenta de servicio es privada; la clave web es configuración pública del
+   cliente.
+3. Publica `firestore.rules` desde Firebase Console o ejecuta
+   `firebase deploy --only firestore:rules` con Firebase CLI configurado.
+4. Crea la primera cuenta en Firebase Authentication, verifica el correo y
+   configura temporalmente `BOOTSTRAP_ADMIN_EMAIL`,
+   `BOOTSTRAP_ORGANIZATION_ID` y `BOOTSTRAP_ORGANIZATION_NAME` en Vercel. Luego
+   inicia sesión y usa **Configurar organización inicial**. Cuando termine,
+   elimina las tres variables de bootstrap y vuelve a desplegar.
+5. Desde la administración, crea organizaciones, asigna operadores y
+   configura dispositivos. Comparte los enlaces para establecer contraseñas
+   por un canal privado y guarda el token del dispositivo como secreto en la
+   Raspberry. El token se muestra una sola vez.
 
 El proyecto Vercel se conecta al repositorio GitHub en la rama `main`. Para cada cambio aceptado, revisar **Deployments** y confirmar que la implementacion de produccion quede en estado `Ready` antes de compartir la URL.
 
@@ -138,7 +195,7 @@ El trabajo de hoy deja evidencia de la ruta ultrasónica hasta Firestore, pero *
 
 1. El IR esta detenido porque dio activaciones falsas sin movimiento. Segun la aclaracion del profesor, no es necesario que funcione para esta entrega; mantener sus conteos fuera de los resultados validos.
 2. Los lectores GPIO se ejecutan como servicios systemd en el host de la Pi, no como contenedores. Esta solucion permitio usar los paquetes GPIO ya instalados y evitar el repositorio APT rechazado, pero debe revisarse contra el requisito de contenedorizacion con el docente o adaptarse de forma segura.
-3. La interfaz publica basica ya muestra mediciones y el codigo incluye consulta historica paginada. Siguen pendientes la autenticacion con dos roles, el aislamiento por organizacion, las alertas, la gestion de dispositivos y la configuracion remota; verificar tambien el despliegue de la ultima version en Vercel.
+3. El código ya implementa acceso con dos roles, datos separados por organización, panel privado en tiempo real, históricos, alertas y administración/configuración remota de dispositivos. **La implementación aún no está verificada en producción**: configurar Firebase/Vercel, publicar las reglas de Firestore, actualizar la Raspberry y probar dos organizaciones antes de afirmar que el requisito está cumplido.
 4. La Pi disponible es una Raspberry Pi 4; el enunciado menciona Pi 3. Confirmar con el docente que la Pi 4 es aceptada como equivalente.
 5. El usuario declaro el inicio de la recoleccion ultrasónica el 15 de octubre a las 18:35 (UTC-3); el IR permanece detenido y no forma parte de estos datos validos. Anotar paradas, cortes de red, reinicios y pruebas con objetos. Si no se alcanza la meta de siete dias y se generan datos dummy, etiquetarlos y analizarlos por separado como simulados. Si hubo una interrupcion, informar el tiempo real de operacion continua y no describirlo como siete dias continuos. Las pruebas controladas no deben describirse como ocupacion real.
 6. Al terminar, exportar los datos, contar registros y huecos, comparar consumo real de Firebase/Vercel con estimaciones y preparar graficos/conclusiones.

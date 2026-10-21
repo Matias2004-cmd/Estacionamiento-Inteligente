@@ -34,6 +34,22 @@
       .badge { display:inline-block; border-radius:999px; padding:.22rem .6rem; font-size:.78rem; font-weight:700; }
       .LIBRE { color:#176b4b; background:#e5f4eb; } .OCUPADO { color:#9f3a24; background:#fce9e4; }
       #message { color:#607067; min-height:1.4rem; }
+      #private-app[hidden], #organization-setup[hidden], #admin-tools[hidden] { display:none; }
+      .private-heading { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:1rem; }
+      .private-heading select, .admin-form input, .admin-form select { min-height:2.5rem; border:1px solid #cbd7ce; border-radius:8px; padding:.45rem .6rem; font:inherit; }
+      .admin-form { display:flex; flex-wrap:wrap; align-items:end; gap:.75rem; margin:.75rem 0; }
+      .admin-form label { display:grid; gap:.35rem; color:#607067; font-size:.85rem; }
+      .admin-form input { max-width:15rem; }
+      .admin-form button, .small-button { min-height:2.4rem; padding:.45rem .75rem; }
+      .alert { padding:.7rem .9rem; margin:.5rem 0; border-radius:8px; background:#fff4dc; color:#704d00; }
+      .alert.error { background:#fce9e4; color:#9f3a24; }
+      .admin-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:1rem; }
+      .admin-grid section { margin:0; }
+      .admin-message { min-height:1.4rem; color:#607067; overflow-wrap:anywhere; }
+      .device-row, .member-row { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.5rem; padding:.75rem 0; border-bottom:1px solid #edf0ec; }
+      .device-row select, .member-row select { min-height:2.2rem; border:1px solid #cbd7ce; border-radius:8px; padding:.3rem; font:inherit; }
+      #device-token-output { overflow-wrap:anywhere; }
+      #private-chart { display:block; width:100%; height:250px; }
       @media(max-width:650px) { .cards { grid-template-columns:1fr; } .topline { align-items:flex-start; flex-direction:column; } }
     </style>
   </head>
@@ -49,9 +65,96 @@
         <div class="card"><span class="label">Distancia más reciente</span><strong class="value" id="latest-distance">—</strong></div>
         <div class="card"><span class="label">Registros consultados</span><strong class="value" id="record-count">—</strong></div>
       </div>
+      <p id="public-live-message" class="admin-message" role="status">Conectando al flujo público en tiempo real…</p>
       <section><h2>Consultar histórico</h2><form id="filters" class="filters"><label>Desde<input id="from" type="datetime-local" /></label><label>Hasta<input id="to" type="datetime-local" /></label><button type="submit">Consultar rango</button></form></section>
       <section><h2>Distancia promedio por minuto</h2><canvas id="chart" aria-label="Gráfico de distancia promedio reciente" role="img"></canvas></section>
       <section><h2>Mediciones</h2><div class="table-wrap"><table><thead><tr><th>Periodo</th><th>Sensor</th><th>Estado</th><th>Promedio</th><th>Muestras</th></tr></thead><tbody id="rows"></tbody></table></div><button id="load-more" class="load-more" type="button" hidden>Cargar más resultados</button></section>
+      <section id="account-panel">
+        <h2>Acceso de organización</h2>
+        <form id="sign-in-form" class="admin-form">
+          <label>Correo<input id="sign-in-email" type="email" autocomplete="username" required /></label>
+          <label>Contraseña<input id="sign-in-password" type="password" autocomplete="current-password" required /></label>
+          <button type="submit">Iniciar sesión</button>
+          <button id="reset-password" type="button">Recuperar contraseña</button>
+          <button id="sign-out" type="button" hidden>Cerrar sesión</button>
+        </form>
+        <p id="account-message" class="admin-message" role="status">La vista pública no requiere iniciar sesión.</p>
+        <button id="verify-email" type="button" hidden>Enviar verificación de correo</button>
+        <div id="organization-setup" hidden>
+          <p>Esta cuenta todavía no pertenece a una organización.</p>
+          <button id="bootstrap-organization" type="button">Configurar organización inicial</button>
+        </div>
+      </section>
+      <div id="private-app" hidden>
+        <section>
+          <div class="private-heading">
+            <h2>Panel de la organización</h2>
+            <label>Organización <select id="organization-select"></select></label>
+          </div>
+          <p>Los datos privados se actualizan al recibir cambios en Firestore.</p>
+          <div id="organization-alerts" aria-live="polite"></div>
+          <div class="cards">
+            <div class="card"><span class="label">Último estado</span><strong class="value" id="private-state">—</strong></div>
+            <div class="card"><span class="label">Última distancia</span><strong class="value" id="private-distance">—</strong></div>
+            <div class="card"><span class="label">Dispositivos activos</span><strong class="value" id="private-device-count">—</strong></div>
+          </div>
+          <section><h2>Distancia de la organización en tiempo real</h2><canvas id="private-chart" aria-label="Gráfico privado de distancia" role="img"></canvas></section>
+          <section><h2>Últimas mediciones en vivo</h2><div class="table-wrap"><table><thead><tr><th>Periodo</th><th>Dispositivo</th><th>Estado</th><th>Promedio</th><th>Muestras</th></tr></thead><tbody id="private-live-rows"></tbody></table></div></section>
+        </section>
+        <section>
+          <h2>Histórico privado de la organización</h2>
+          <form id="private-filters" class="filters">
+            <label>Desde<input id="private-from" type="datetime-local" /></label>
+            <label>Hasta<input id="private-to" type="datetime-local" /></label>
+            <button type="submit">Consultar histórico</button>
+          </form>
+          <div class="table-wrap"><table><thead><tr><th>Periodo</th><th>Dispositivo</th><th>Estado</th><th>Promedio</th><th>Muestras</th></tr></thead><tbody id="private-history-rows"></tbody></table></div>
+          <button id="private-load-more" class="load-more" type="button" hidden>Cargar más resultados</button>
+        </section>
+        <div id="admin-tools" hidden>
+          <div class="admin-grid">
+            <section>
+              <h2>Organizaciones</h2>
+              <p>Los datos y dispositivos de cada organización se almacenan por separado.</p>
+              <form id="organization-form" class="admin-form">
+                <label>Nombre<input id="organization-name" maxlength="100" required /></label>
+                <button type="submit">Crear organización</button>
+              </form>
+              <p id="organization-message" class="admin-message" role="status"></p>
+            </section>
+            <section>
+              <h2>Dispositivos</h2>
+              <div id="device-list"></div>
+              <form id="device-form" class="admin-form">
+                <input id="device-id" type="hidden" />
+                <label>ID del dispositivo<input id="device-identifier" maxlength="64" pattern="[A-Za-z0-9_-]+" value="raspberry-pi-1" required /></label>
+                <label>Nombre<input id="device-name" maxlength="100" required /></label>
+                <label><span>Publicar también en el panel público (demo)</span><input id="device-public-demo" type="checkbox" /></label>
+                <p>Al marcar esta opción, una copia de las mediciones de este dispositivo será pública. Déjala desmarcada para mantenerlas solo en la organización. Las copias ya publicadas no se eliminan al desmarcarla.</p>
+                <label>Distancia libre (cm)<input id="device-free-distance" type="number" min="5" max="200" step="0.1" value="23" required /></label>
+                <label>Intervalo (segundos)<input id="device-sample-interval" type="number" min="0.1" max="3600" step="0.1" value="5" required /></label>
+                <label>Alerta de distancia (cm)<input id="device-alert-distance" type="number" min="0" max="200" step="0.1" value="20" required /></label>
+                <label>Alerta sin lecturas (segundos)<input id="device-offline-seconds" type="number" min="420" max="86400" value="600" required /></label>
+                <button type="submit">Guardar dispositivo</button>
+                <button id="device-cancel" type="button">Limpiar</button>
+              </form>
+              <p id="device-message" class="admin-message" role="status"></p>
+              <div id="device-token-output" hidden></div>
+            </section>
+            <section>
+              <h2>Usuarios y roles</h2>
+              <form id="user-form" class="admin-form">
+                <label>Correo<input id="member-email" type="email" required /></label>
+                <label>Rol<select id="member-role"><option value="operator">Operador</option><option value="admin">Administrador</option></select></label>
+                <button type="submit">Agregar usuario</button>
+              </form>
+              <p>Al crear una cuenta, comparte el enlace de configuración de contraseña por un canal privado.</p>
+              <div id="member-list"></div>
+              <p id="member-message" class="admin-message" role="status"></p>
+            </section>
+          </div>
+        </div>
+      </div>
     </main>
     <script>
       const message = document.querySelector("#message");
@@ -60,8 +163,8 @@
       let loadedRecords = [];
       let nextCursor = null;
       const formatDate = (value) => value ? new Intl.DateTimeFormat("es-CL", { dateStyle: "short", timeStyle: "short" }).format(new Date(value)) : "—";
-      function drawChart(records) {
-        const canvas = document.querySelector("#chart");
+      function drawChart(records, selector = "#chart") {
+        const canvas = document.querySelector(selector);
         const ratio = window.devicePixelRatio || 1;
         const width = canvas.clientWidth;
         const height = 250;
@@ -122,6 +225,589 @@
       loadMoreButton.addEventListener("click", () => load(true));
       window.addEventListener("resize", () => drawChart(window.lastRecords || []));
       load();
+    </script>
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
+      import {
+        getAuth,
+        onAuthStateChanged,
+        sendEmailVerification,
+        sendPasswordResetEmail,
+        signInWithEmailAndPassword,
+        signOut,
+      } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js";
+      import {
+        collection,
+        getFirestore,
+        limit,
+        onSnapshot,
+        orderBy,
+        query,
+      } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
+
+      const accountMessage = document.querySelector("#account-message");
+      const organizationSetup = document.querySelector("#organization-setup");
+      const privateApp = document.querySelector("#private-app");
+      const adminTools = document.querySelector("#admin-tools");
+      const organizationSelect = document.querySelector("#organization-select");
+      let auth;
+      let firestore;
+      let currentUser = null;
+      let currentOrganization = null;
+      let memberships = [];
+      let measurements = [];
+      let devices = [];
+      let privateRecords = [];
+      let privateCursor = null;
+      let measurementUnsubscribe = null;
+      let deviceUnsubscribe = null;
+
+      const formatPrivateDate = (value) => value
+        ? new Intl.DateTimeFormat("es-CL", { dateStyle: "short", timeStyle: "short" }).format(new Date(value))
+        : "—";
+
+      function setAccountMessage(text, isError = false) {
+        accountMessage.textContent = text;
+        accountMessage.classList.toggle("error", isError);
+      }
+
+      async function apiRequest(path, options = {}) {
+        if (!currentUser) throw new Error("Inicia sesión para continuar.");
+        const idToken = await currentUser.getIdToken();
+        const response = await fetch(path, {
+          ...options,
+          headers: {
+            accept: "application/json",
+            "content-type": "application/json",
+            authorization: `Bearer ${idToken}`,
+            ...options.headers,
+          },
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `La API respondió ${response.status}`);
+        return result;
+      }
+
+      function clearSubscriptions() {
+        measurementUnsubscribe?.();
+        deviceUnsubscribe?.();
+        measurementUnsubscribe = null;
+        deviceUnsubscribe = null;
+      }
+
+      function clearPrivateData() {
+        measurements = [];
+        devices = [];
+        privateRecords = [];
+        privateCursor = null;
+        currentOrganization = null;
+        for (const selector of [
+          "#private-live-rows",
+          "#private-history-rows",
+          "#device-list",
+          "#member-list",
+          "#organization-alerts",
+        ]) {
+          document.querySelector(selector).replaceChildren();
+        }
+        document.querySelector("#private-state").textContent = "—";
+        document.querySelector("#private-distance").textContent = "—";
+        document.querySelector("#private-device-count").textContent = "—";
+        const tokenOutput = document.querySelector("#device-token-output");
+        tokenOutput.textContent = "";
+        tokenOutput.hidden = true;
+        document.querySelector("#device-message").textContent = "";
+        document.querySelector("#member-message").textContent = "";
+      }
+
+      function renderPrivateTable(records, target = "#private-live-rows") {
+        const body = document.querySelector(target);
+        body.replaceChildren();
+        for (const record of records) {
+          const row = document.createElement("tr");
+          const values = [
+            formatPrivateDate(record.periodoInicio),
+            record.sensorId || "—",
+            record.estado || "—",
+            Number.isFinite(Number(record.distanciaCm)) ? `${Number(record.distanciaCm).toFixed(2)} cm` : "—",
+            Number.isInteger(record.muestras) ? String(record.muestras) : "—",
+          ];
+          for (const value of values) {
+            const cell = document.createElement("td");
+            cell.textContent = value;
+            row.append(cell);
+          }
+          body.append(row);
+        }
+      }
+
+      function drawPrivateChart() {
+        const canvas = document.querySelector("#private-chart");
+        const ratio = window.devicePixelRatio || 1;
+        const width = canvas.clientWidth;
+        const height = 250;
+        canvas.width = width * ratio;
+        canvas.height = height * ratio;
+        const context = canvas.getContext("2d");
+        context.scale(ratio, ratio);
+        context.clearRect(0, 0, width, height);
+        const values = [...measurements].reverse()
+          .map((record) => Number(record.distanciaCm))
+          .filter(Number.isFinite);
+        if (!values.length || !width) return;
+        const max = Math.max(30, ...values);
+        const left = 42;
+        const right = 12;
+        const top = 18;
+        const bottom = 28;
+        const x = (index) => left + (values.length < 2 ? 0 : index * (width - left - right) / (values.length - 1));
+        const y = (value) => height - bottom - value * (height - top - bottom) / max;
+        context.strokeStyle = "#e5ebe5";
+        for (let tick = 0; tick <= 3; tick++) {
+          const value = max * tick / 3;
+          context.beginPath();
+          context.moveTo(left, y(value));
+          context.lineTo(width - right, y(value));
+          context.stroke();
+          context.fillStyle = "#68766d";
+          context.fillText(`${value.toFixed(0)} cm`, 2, y(value) - 4);
+        }
+        context.strokeStyle = "#176b4b";
+        context.lineWidth = 2.5;
+        context.beginPath();
+        values.forEach((value, index) => index
+          ? context.lineTo(x(index), y(value))
+          : context.moveTo(x(index), y(value)));
+        context.stroke();
+      }
+
+      function renderAlerts() {
+        const alertContainer = document.querySelector("#organization-alerts");
+        alertContainer.replaceChildren();
+        const latestByDevice = new Map();
+        for (const record of measurements) {
+          if (!latestByDevice.has(record.sensorId)) latestByDevice.set(record.sensorId, record);
+        }
+        let activeCount = 0;
+        for (const device of devices) {
+          const latest = latestByDevice.get(device.id);
+          const settings = device.configuracion || {};
+          const lastReading = latest?.periodoInicio ? Date.parse(latest.periodoInicio) : 0;
+          const offline = !device.activo || !lastReading ||
+            Date.now() - lastReading > (settings.tiempoDesconexionSegundos || 600) * 1000;
+          const messages = [];
+          if (!device.activo) messages.push(`${device.nombre}: dispositivo deshabilitado.`);
+          else if (offline) messages.push(`${device.nombre}: sin lecturas recientes.`);
+          if (latest && (latest.estado === "OCUPADO" ||
+              Number(latest.distanciaCm) <= Number(settings.umbralAlertaCm))) {
+            messages.push(`${device.nombre}: alerta de ocupación o distancia.`);
+          }
+          for (const text of messages) {
+            const alert = document.createElement("p");
+            alert.className = "alert";
+            alert.textContent = text;
+            alertContainer.append(alert);
+            activeCount++;
+          }
+        }
+        if (!activeCount) {
+          const empty = document.createElement("p");
+          empty.textContent = devices.length ? "Sin alertas activas." : "Todavía no hay dispositivos configurados.";
+          alertContainer.append(empty);
+        }
+      }
+
+      function renderPrivateDashboard() {
+        const latest = measurements[0];
+        document.querySelector("#private-state").textContent = latest?.estado || "Sin datos";
+        document.querySelector("#private-distance").textContent = latest
+          ? `${Number(latest.distanciaCm).toFixed(1)} cm`
+          : "—";
+        document.querySelector("#private-device-count").textContent =
+          `${devices.filter((device) => device.activo).length} / ${devices.length}`;
+        renderPrivateTable(measurements);
+        renderAlerts();
+        drawPrivateChart();
+      }
+
+      function toIsoDate(value) {
+        return value?.toDate?.().toISOString() || value || null;
+      }
+
+      async function loadPrivateHistory(append = false) {
+        const requestedOrganizationId = currentOrganization.id;
+        const params = new URLSearchParams({
+          scope: "organizacion",
+          organizacion: requestedOrganizationId,
+          limit: "100",
+        });
+        const from = document.querySelector("#private-from").value;
+        const to = document.querySelector("#private-to").value;
+        if (from) params.set("from", new Date(from).toISOString());
+        if (to) params.set("to", new Date(to).toISOString());
+        if (append && privateCursor) params.set("cursor", privateCursor);
+        const result = await apiRequest(`/api/mediciones?${params}`);
+        if (currentOrganization?.id !== requestedOrganizationId) return;
+        privateRecords = append ? privateRecords.concat(result.records) : result.records;
+        privateCursor = result.nextCursor;
+        renderPrivateTable(privateRecords, "#private-history-rows");
+        document.querySelector("#private-load-more").hidden = !privateCursor;
+      }
+
+      function renderDeviceList() {
+        const list = document.querySelector("#device-list");
+        list.replaceChildren();
+        for (const device of devices) {
+          const row = document.createElement("div");
+          row.className = "device-row";
+          const summary = document.createElement("span");
+          summary.textContent = `${device.nombre} · ${device.activo ? "activo" : "deshabilitado"}${device.publicarEnDemo ? " · demo público" : ""}`;
+          const edit = document.createElement("button");
+          edit.className = "small-button";
+          edit.type = "button";
+          edit.textContent = "Editar";
+          edit.addEventListener("click", () => {
+            document.querySelector("#device-id").value = device.id;
+            document.querySelector("#device-identifier").value = device.id;
+            document.querySelector("#device-identifier").disabled = true;
+            document.querySelector("#device-name").value = device.nombre;
+            document.querySelector("#device-public-demo").checked = device.publicarEnDemo === true;
+            document.querySelector("#device-free-distance").value = device.configuracion?.distanciaLibreCm ?? 23;
+            document.querySelector("#device-sample-interval").value = device.configuracion?.intervaloMuestreoSegundos ?? 5;
+            document.querySelector("#device-alert-distance").value = device.configuracion?.umbralAlertaCm ?? 20;
+            document.querySelector("#device-offline-seconds").value = device.configuracion?.tiempoDesconexionSegundos ?? 600;
+          });
+          row.append(summary, edit);
+          if (device.activo) {
+            const disable = document.createElement("button");
+            disable.className = "small-button";
+            disable.type = "button";
+            disable.textContent = "Deshabilitar";
+            disable.addEventListener("click", async () => {
+              if (!window.confirm(`¿Deshabilitar ${device.nombre} y revocar su credencial?`)) return;
+              try {
+                await apiRequest("/api/dispositivos", {
+                  method: "DELETE",
+                  body: JSON.stringify({ organizacion: currentOrganization.id, dispositivoId: device.id }),
+                });
+                document.querySelector("#device-message").textContent = "Dispositivo deshabilitado y credencial revocada. Detén la adquisición en la Raspberry para evitar que continúe acumulando registros pendientes.";
+              } catch (error) {
+                document.querySelector("#device-message").textContent = error.message;
+              }
+            });
+            row.append(disable);
+          }
+          list.append(row);
+        }
+      }
+
+      async function loadMembers() {
+        const requestedOrganizationId = currentOrganization.id;
+        const result = await apiRequest(`/api/usuarios?organizacion=${encodeURIComponent(requestedOrganizationId)}`);
+        if (currentOrganization?.id !== requestedOrganizationId) return;
+        const list = document.querySelector("#member-list");
+        list.replaceChildren();
+        for (const member of result.users) {
+          const row = document.createElement("div");
+          row.className = "member-row";
+          const email = document.createElement("span");
+          email.textContent = member.email;
+          const role = document.createElement("select");
+          for (const [value, label] of [["operator", "Operador"], ["admin", "Administrador"]]) {
+            const option = document.createElement("option");
+            option.value = value;
+            option.textContent = label;
+            role.append(option);
+          }
+          role.value = member.role;
+          role.disabled = member.uid === currentUser.uid;
+          role.addEventListener("change", async () => {
+            try {
+              await apiRequest("/api/usuarios", {
+                method: "PATCH",
+                body: JSON.stringify({ organizacion: currentOrganization.id, uid: member.uid, role: role.value }),
+              });
+              member.role = role.value;
+              document.querySelector("#member-message").textContent = "Rol actualizado.";
+            } catch (error) {
+              role.value = member.role;
+              document.querySelector("#member-message").textContent = error.message;
+            }
+          });
+          row.append(email, role);
+          if (member.uid !== currentUser.uid) {
+            const remove = document.createElement("button");
+            remove.className = "small-button";
+            remove.type = "button";
+            remove.textContent = "Quitar";
+            remove.addEventListener("click", async () => {
+              if (!window.confirm(`¿Quitar a ${member.email} de esta organización?`)) return;
+              try {
+                await apiRequest("/api/usuarios", {
+                  method: "DELETE",
+                  body: JSON.stringify({ organizacion: currentOrganization.id, uid: member.uid }),
+                });
+                await loadMembers();
+              } catch (error) {
+                document.querySelector("#member-message").textContent = error.message;
+              }
+            });
+            row.append(remove);
+          }
+          list.append(row);
+        }
+      }
+
+      async function loadOrganization(organizationId) {
+        clearSubscriptions();
+        currentOrganization = memberships.find((organization) => organization.id === organizationId);
+        if (!currentOrganization) return;
+        const selectedOrganizationId = currentOrganization.id;
+        privateApp.hidden = false;
+        adminTools.hidden = currentOrganization.role !== "admin";
+        measurements = [];
+        devices = [];
+        privateRecords = [];
+        privateCursor = null;
+        renderPrivateTable([], "#private-live-rows");
+        renderPrivateTable([], "#private-history-rows");
+        document.querySelector("#organization-alerts").replaceChildren();
+        const path = ["organizaciones", currentOrganization.id];
+        measurementUnsubscribe = onSnapshot(
+          query(collection(firestore, ...path, "mediciones"), orderBy("periodoInicio", "desc"), limit(100)),
+          (snapshot) => {
+            if (currentOrganization?.id !== selectedOrganizationId) return;
+            measurements = snapshot.docs.map((document) => ({
+              id: document.id,
+              ...document.data(),
+              periodoInicio: toIsoDate(document.data().periodoInicio),
+            }));
+            renderPrivateDashboard();
+          },
+          (error) => setAccountMessage(`No se pudieron recibir mediciones privadas: ${error.message}`, true),
+        );
+        deviceUnsubscribe = onSnapshot(
+          query(collection(firestore, ...path, "dispositivos"), orderBy("nombre")),
+          (snapshot) => {
+            if (currentOrganization?.id !== selectedOrganizationId) return;
+            devices = snapshot.docs.map((document) => ({ id: document.id, ...document.data() }));
+            renderDeviceList();
+            renderPrivateDashboard();
+          },
+          (error) => setAccountMessage(`No se pudieron recibir dispositivos: ${error.message}`, true),
+        );
+        try {
+          await loadPrivateHistory();
+          if (currentOrganization.role === "admin") await loadMembers();
+          setAccountMessage(`Sesión iniciada como ${currentUser.email} · ${currentOrganization.nombre}`);
+        } catch (error) {
+          setAccountMessage(error.message, true);
+        }
+      }
+
+      async function refreshSession(user) {
+        clearSubscriptions();
+        clearPrivateData();
+        currentUser = user;
+        privateApp.hidden = true;
+        organizationSetup.hidden = true;
+        adminTools.hidden = true;
+        document.querySelector("#sign-out").hidden = !user;
+        document.querySelector("#verify-email").hidden = !user || user.emailVerified;
+        if (!user) {
+          memberships = [];
+          currentOrganization = null;
+          setAccountMessage("La vista pública no requiere iniciar sesión.");
+          return;
+        }
+        if (!user.emailVerified) {
+          setAccountMessage("Verifica tu correo electrónico antes de acceder al panel privado.");
+          return;
+        }
+        try {
+          const result = await apiRequest("/api/sesion");
+          memberships = result.organizations;
+          if (!memberships.length) {
+            organizationSetup.hidden = false;
+            setAccountMessage("Cuenta autenticada; falta asignarla a una organización.");
+            return;
+          }
+          organizationSelect.replaceChildren();
+          for (const organization of memberships) {
+            const option = document.createElement("option");
+            option.value = organization.id;
+            option.textContent = `${organization.nombre} (${organization.role === "admin" ? "administrador" : "operador"})`;
+            organizationSelect.append(option);
+          }
+          await loadOrganization(memberships[0].id);
+        } catch (error) {
+          setAccountMessage(error.message, true);
+        }
+      }
+
+      try {
+        const configResponse = await fetch("/api/configuracion-publica");
+        const config = await configResponse.json();
+        if (!configResponse.ok) throw new Error(config.error || "No se pudo cargar la configuración de Firebase.");
+        const app = initializeApp(config);
+        auth = getAuth(app);
+        firestore = getFirestore(app);
+        onSnapshot(
+          query(collection(firestore, "mediciones"), orderBy("periodoInicio", "desc"), limit(1)),
+          (snapshot) => {
+            const latestDocument = snapshot.docs[0];
+            if (!latestDocument) return;
+            const latest = latestDocument.data();
+            document.querySelector("#latest-state").textContent = latest.estado || "—";
+            document.querySelector("#latest-distance").textContent =
+              Number.isFinite(Number(latest.distanciaCm))
+                ? `${Number(latest.distanciaCm).toFixed(1)} cm`
+                : "—";
+            document.querySelector("#public-live-message").textContent =
+              `Último dato público recibido: ${formatPrivateDate(latest.periodoInicio?.toDate?.().toISOString())}`;
+          },
+          (error) => {
+            document.querySelector("#public-live-message").textContent =
+              `Actualización pública en vivo no disponible: ${error.message}`;
+          },
+        );
+        onAuthStateChanged(auth, (user) => refreshSession(user));
+      } catch (error) {
+        setAccountMessage(`Acceso de organización no disponible: ${error.message}`, true);
+      }
+
+      document.querySelector("#sign-in-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        try {
+          await signInWithEmailAndPassword(auth, document.querySelector("#sign-in-email").value, document.querySelector("#sign-in-password").value);
+          document.querySelector("#sign-in-password").value = "";
+        } catch (error) {
+          setAccountMessage(`No se pudo iniciar sesión: ${error.message}`, true);
+        }
+      });
+      document.querySelector("#sign-out").addEventListener("click", () => signOut(auth));
+      document.querySelector("#reset-password").addEventListener("click", async () => {
+        try {
+          const email = document.querySelector("#sign-in-email").value;
+          if (!email) throw new Error("Escribe tu correo para recuperar la contraseña.");
+          await sendPasswordResetEmail(auth, email);
+          setAccountMessage("Si el correo corresponde a una cuenta, Firebase enviará instrucciones para restablecer la contraseña.");
+        } catch (error) {
+          setAccountMessage(error.message, true);
+        }
+      });
+      document.querySelector("#verify-email").addEventListener("click", async () => {
+        try {
+          await sendEmailVerification(currentUser);
+          setAccountMessage("Se envió un correo de verificación. Confirma tu dirección y vuelve a iniciar sesión.");
+        } catch (error) {
+          setAccountMessage(error.message, true);
+        }
+      });
+      document.querySelector("#bootstrap-organization").addEventListener("click", async () => {
+        try {
+          await apiRequest("/api/iniciar-organizacion", { method: "POST", body: "{}" });
+          await refreshSession(currentUser);
+        } catch (error) {
+          setAccountMessage(error.message, true);
+        }
+      });
+      organizationSelect.addEventListener("change", () => loadOrganization(organizationSelect.value));
+      document.querySelector("#private-filters").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        try {
+          await loadPrivateHistory();
+        } catch (error) {
+          setAccountMessage(error.message, true);
+        }
+      });
+      document.querySelector("#private-load-more").addEventListener("click", async () => {
+        try {
+          await loadPrivateHistory(true);
+        } catch (error) {
+          setAccountMessage(error.message, true);
+        }
+      });
+      document.querySelector("#device-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const deviceId = document.querySelector("#device-id").value;
+        const body = {
+          organizacion: currentOrganization.id,
+          dispositivoId: document.querySelector("#device-identifier").value,
+          nombre: document.querySelector("#device-name").value,
+          publicarEnDemo: document.querySelector("#device-public-demo").checked,
+          configuracion: {
+            distanciaLibreCm: Number(document.querySelector("#device-free-distance").value),
+            intervaloMuestreoSegundos: Number(document.querySelector("#device-sample-interval").value),
+            umbralAlertaCm: Number(document.querySelector("#device-alert-distance").value),
+            tiempoDesconexionSegundos: Number(document.querySelector("#device-offline-seconds").value),
+          },
+        };
+        try {
+          if (deviceId) body.dispositivoId = deviceId;
+          else body.dispositivoId = document.querySelector("#device-identifier").value;
+          const result = await apiRequest("/api/dispositivos", {
+            method: deviceId ? "PATCH" : "POST",
+            body: JSON.stringify(body),
+          });
+          const message = document.querySelector("#device-message");
+          message.textContent = result.token
+            ? `Dispositivo creado. Guarda esta credencial ahora; no volverá a mostrarse: ${result.token}. Configúrala como secreto API_TOKEN_FILE en la Raspberry. ${body.publicarEnDemo ? "Sus mediciones también se publicarán en el panel demo." : "Sus mediciones quedarán solo en la organización."}`
+            : "Configuración guardada. Se aplicará cuando el dispositivo consulte la API.";
+          document.querySelector("#device-form").reset();
+          document.querySelector("#device-id").value = "";
+          document.querySelector("#device-identifier").disabled = false;
+          document.querySelector("#device-token-output").hidden = !result.token;
+          document.querySelector("#device-token-output").textContent = result.token
+            ? `Credencial de dispositivo (mostrar una sola vez): ${result.token}`
+            : "";
+        } catch (error) {
+          document.querySelector("#device-message").textContent = error.message;
+        }
+      });
+      document.querySelector("#device-cancel").addEventListener("click", () => {
+        document.querySelector("#device-form").reset();
+        document.querySelector("#device-id").value = "";
+        document.querySelector("#device-identifier").disabled = false;
+      });
+      document.querySelector("#user-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        try {
+          const result = await apiRequest("/api/usuarios", {
+            method: "POST",
+            body: JSON.stringify({
+              organizacion: currentOrganization.id,
+              email: document.querySelector("#member-email").value,
+              role: document.querySelector("#member-role").value,
+            }),
+          });
+          const message = document.querySelector("#member-message");
+          message.textContent = result.passwordResetLink
+            ? `Usuario agregado. Enlace para establecer contraseña (compartir por un canal privado): ${result.passwordResetLink}`
+            : "Usuario agregado a la organización.";
+          document.querySelector("#user-form").reset();
+          await loadMembers();
+        } catch (error) {
+          document.querySelector("#member-message").textContent = error.message;
+        }
+      });
+      window.addEventListener("resize", drawPrivateChart);
+      window.setInterval(renderAlerts, 15000);
+      document.querySelector("#organization-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        try {
+          const result = await apiRequest("/api/organizaciones", {
+            method: "POST",
+            body: JSON.stringify({ nombre: document.querySelector("#organization-name").value }),
+          });
+          await refreshSession(currentUser);
+          organizationSelect.value = result.organizationId;
+          await loadOrganization(result.organizationId);
+          document.querySelector("#organization-message").textContent = "Organización creada. Invita usuarios desde la administración de usuarios.";
+        } catch (error) {
+          document.querySelector("#organization-message").textContent = error.message;
+        }
+      });
     </script>
   </body>
 </html>

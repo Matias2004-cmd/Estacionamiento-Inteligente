@@ -12,7 +12,6 @@ WorkingDirectory=/home/matiascatalan/estacionamiento
 EnvironmentFile=/home/matiascatalan/estacionamiento/.env
 Environment=GPIOZERO_PIN_FACTORY=lgpio
 Environment=MQTT_HOST=127.0.0.1
-Environment=SENSOR_ID=entrada-ir-1
 Environment=IR_GPIO=18
 ExecStart=/usr/bin/python3 /home/matiascatalan/estacionamiento/servicios/adquisicion/ir.py
 Restart=on-failure

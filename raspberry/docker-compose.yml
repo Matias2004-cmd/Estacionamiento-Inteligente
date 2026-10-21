@@ -30,7 +30,7 @@ services:
         condition: service_healthy
     environment:
       MQTT_HOST: mqtt
-      DEVICE_ID: raspberry-pi-1
+      DEVICE_ID: ${DEVICE_ID:-raspberry-pi-1}
       DISTANCIA_LIBRE_CM: ${DISTANCIA_LIBRE_CM:-23}
       MQTT_SAMPLE_TOPIC: sensores/ultrasonico
       MQTT_IR_TOPIC: sensores/ir
@@ -64,8 +64,11 @@ services:
       - sync_data:/var/lib/estacionamiento
     environment:
       MQTT_HOST: mqtt
+      DEVICE_ID: ${DEVICE_ID:-raspberry-pi-1}
       MQTT_AGGREGATE_TOPIC: procesados/mediciones
       API_URL: https://solemne-1-ti.vercel.app/api/mediciones
+      DEVICE_CONFIG_URL: https://solemne-1-ti.vercel.app/api/configuracion-dispositivo
+      DEVICE_CONFIG_POLL_SECONDS: ${DEVICE_CONFIG_POLL_SECONDS:-30}
       API_TOKEN_FILE: /run/secrets/api_token
       VERCEL_BYPASS_FILE: /run/secrets/vercel_bypass
       OUTBOX_PATH: /var/lib/estacionamiento/outbox.sqlite3

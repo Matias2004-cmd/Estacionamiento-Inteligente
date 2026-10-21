@@ -1,15 +1,16 @@
-const { initializeApp, getApps, cert } = require("firebase-admin/app");
-const { FieldPath, getFirestore, Timestamp } = require("firebase-admin/firestore");
-const { timingSafeEqual } = require("node:crypto");
+const { FieldPath, Timestamp } = require("firebase-admin/firestore");
+const { randomUUID, timingSafeEqual } = require("node:crypto");
+const {
+  authenticateDevice,
+  getDatabase,
+  requireOrganization,
+  sendError,
+} = require("../lib/api-auth");
 
-function hasValidToken(req) {
+function hasValidPublicToken(req) {
   const expected = process.env.API_TOKEN;
   const provided = req.headers.authorization?.replace(/^Bearer\s+/i, "");
-
-  if (!expected || !provided) {
-    return false;
-  }
-
+  if (!expected || !provided) return false;
   const expectedBuffer = Buffer.from(expected);
   const providedBuffer = Buffer.from(provided);
   return (
@@ -18,25 +19,8 @@ function hasValidToken(req) {
   );
 }
 
-function getDatabase() {
-  const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-  if (!serviceAccountJson) {
-    throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON is not configured");
-  }
-
-  if (getApps().length === 0) {
-    const serviceAccount = JSON.parse(serviceAccountJson);
-    initializeApp({ credential: cert(serviceAccount) });
-  }
-
-  return getFirestore();
-}
-
 function isValidMeasurement(record) {
-  if (!record || typeof record !== "object" || Array.isArray(record)) {
-    return false;
-  }
-
+  if (!record || typeof record !== "object" || Array.isArray(record)) return false;
   const {
     distanciaCm,
     distanciaMinCm,
@@ -49,7 +33,7 @@ function isValidMeasurement(record) {
     sensorId,
   } = record;
 
-  if (
+  return !(
     typeof distanciaCm !== "number" ||
     !Number.isFinite(distanciaCm) ||
     distanciaCm < 0 ||
@@ -83,11 +67,7 @@ function isValidMeasurement(record) {
     (recordId !== undefined &&
       (typeof recordId !== "string" ||
         !/^[A-Za-z0-9_-]{1,128}$/.test(recordId)))
-  ) {
-    return false;
-  }
-
-  return true;
+  );
 }
 
 function toFirestoreMeasurement(record) {
@@ -97,112 +77,128 @@ function toFirestoreMeasurement(record) {
     sensorId: record.sensorId,
     timestamp: Timestamp.now(),
   };
-
-  if (record.distanciaMinCm !== undefined) {
-    measurement.distanciaMinCm = record.distanciaMinCm;
-  }
-  if (record.distanciaMaxCm !== undefined) {
-    measurement.distanciaMaxCm = record.distanciaMaxCm;
-  }
-  if (record.muestras !== undefined) {
-    measurement.muestras = record.muestras;
-  }
-  if (record.deteccionesIr !== undefined) {
-    measurement.deteccionesIr = record.deteccionesIr;
+  for (const field of [
+    "distanciaMinCm",
+    "distanciaMaxCm",
+    "muestras",
+    "deteccionesIr",
+  ]) {
+    if (record[field] !== undefined) measurement[field] = record[field];
   }
   if (record.periodoInicio !== undefined) {
     measurement.periodoInicio = Timestamp.fromDate(new Date(record.periodoInicio));
   }
-
   return measurement;
 }
 
-module.exports = async function handler(req, res) {
-  if (req.method === "GET") {
-    try {
-      const db = getDatabase();
-      const requestedLimit = Number.parseInt(req.query?.limit, 10);
-      const limit = Number.isInteger(requestedLimit)
-        ? Math.min(Math.max(requestedLimit, 1), 500)
-        : 100;
-      const from = req.query?.from;
-      const to = req.query?.to;
-      const cursorToken = req.query?.cursor;
-      if (
-        (from !== undefined && !Number.isFinite(Date.parse(from))) ||
-        (to !== undefined && !Number.isFinite(Date.parse(to))) ||
-        (from !== undefined && to !== undefined && Date.parse(from) > Date.parse(to)) ||
-        (cursorToken !== undefined &&
-          (typeof cursorToken !== "string" || !/^[A-Za-z0-9_-]+$/.test(cursorToken)))
-      ) {
-        return res.status(400).json({ error: "Invalid date range" });
-      }
+function parseCursor(cursorToken) {
+  if (cursorToken === undefined) return null;
+  if (
+    typeof cursorToken !== "string" ||
+    !/^[A-Za-z0-9_-]+$/.test(cursorToken)
+  ) {
+    throw Object.assign(new Error("Invalid cursor"), { status: 400 });
+  }
+  let cursor;
+  try {
+    cursor = JSON.parse(Buffer.from(cursorToken, "base64url").toString("utf8"));
+  } catch {
+    throw Object.assign(new Error("Invalid cursor"), { status: 400 });
+  }
+  if (
+    !cursor ||
+    typeof cursor.periodoInicio !== "string" ||
+    !Number.isFinite(Date.parse(cursor.periodoInicio)) ||
+    typeof cursor.id !== "string" ||
+    cursor.id.length < 1 ||
+    cursor.id.length > 150
+  ) {
+    throw Object.assign(new Error("Invalid cursor"), { status: 400 });
+  }
+  return cursor;
+}
 
-      let cursor;
-      if (cursorToken !== undefined) {
-        try {
-          cursor = JSON.parse(Buffer.from(cursorToken, "base64url").toString("utf8"));
-        } catch {
-          return res.status(400).json({ error: "Invalid cursor" });
-        }
-        if (
-          !cursor ||
-          typeof cursor.periodoInicio !== "string" ||
-          !Number.isFinite(Date.parse(cursor.periodoInicio)) ||
-          typeof cursor.id !== "string" ||
-          cursor.id.length < 1 ||
-          cursor.id.length > 150
-        ) {
-          return res.status(400).json({ error: "Invalid cursor" });
-        }
-      }
+function validDateRange(from, to) {
+  return !(
+    (from !== undefined && !Number.isFinite(Date.parse(from))) ||
+    (to !== undefined && !Number.isFinite(Date.parse(to))) ||
+    (from !== undefined &&
+      to !== undefined &&
+      Date.parse(from) > Date.parse(to))
+  );
+}
 
-      let query = db.collection("mediciones");
-      if (from !== undefined) {
-        query = query.where("periodoInicio", ">=", Timestamp.fromDate(new Date(from)));
-      }
-      if (to !== undefined) {
-        query = query.where("periodoInicio", "<=", Timestamp.fromDate(new Date(to)));
-      }
-      query = query.orderBy("periodoInicio", "desc").orderBy(FieldPath.documentId(), "desc");
-      if (cursor) {
-        query = query.startAfter(Timestamp.fromDate(new Date(cursor.periodoInicio)), cursor.id);
-      }
-      const snapshot = await query.limit(limit + 1).get();
-      const hasMore = snapshot.docs.length > limit;
-      const page = snapshot.docs.slice(0, limit);
-      const records = page.map((document) => {
-        const data = document.data();
-        return {
-          id: document.id,
-          ...data,
-          periodoInicio: data.periodoInicio?.toDate?.().toISOString() ?? null,
-          timestamp: data.timestamp?.toDate?.().toISOString() ?? null,
-        };
-      });
-      const last = page.at(-1);
-      const nextCursor = hasMore && last
-        ? Buffer.from(JSON.stringify({
+async function readPage(db, req, res) {
+  const { from, to, scope } = req.query || {};
+  if (!validDateRange(from, to)) {
+    return res.status(400).json({ error: "Invalid date range" });
+  }
+  if (scope !== undefined && scope !== "organizacion") {
+    return res.status(400).json({ error: "Invalid measurement scope" });
+  }
+  if (scope === "organizacion") res.setHeader("Cache-Control", "private, no-store");
+
+  const requestedLimit = Number.parseInt(req.query?.limit, 10);
+  const limit = Number.isInteger(requestedLimit)
+    ? Math.min(Math.max(requestedLimit, 1), 500)
+    : 100;
+  const cursor = parseCursor(req.query?.cursor);
+
+  let collection = db.collection("mediciones");
+  if (scope === "organizacion") {
+    const organization = await requireOrganization(
+      req,
+      db,
+      req.query?.organizacion,
+    );
+    collection = db
+      .collection("organizaciones")
+      .doc(organization.organizationId)
+      .collection("mediciones");
+  }
+
+  let query = collection;
+  if (from !== undefined) {
+    query = query.where("periodoInicio", ">=", Timestamp.fromDate(new Date(from)));
+  }
+  if (to !== undefined) {
+    query = query.where("periodoInicio", "<=", Timestamp.fromDate(new Date(to)));
+  }
+  query = query
+    .orderBy("periodoInicio", "desc")
+    .orderBy(FieldPath.documentId(), "desc");
+  if (cursor) {
+    query = query.startAfter(
+      Timestamp.fromDate(new Date(cursor.periodoInicio)),
+      cursor.id,
+    );
+  }
+  const snapshot = await query.limit(limit + 1).get();
+  const hasMore = snapshot.docs.length > limit;
+  const page = snapshot.docs.slice(0, limit);
+  const records = page.map((document) => {
+    const data = document.data();
+    return {
+      id: document.id,
+      ...data,
+      periodoInicio: data.periodoInicio?.toDate?.().toISOString() ?? null,
+      timestamp: data.timestamp?.toDate?.().toISOString() ?? null,
+    };
+  });
+  const last = page.at(-1);
+  const nextCursor =
+    hasMore && last
+      ? Buffer.from(
+          JSON.stringify({
             periodoInicio: last.get("periodoInicio").toDate().toISOString(),
             id: last.id,
-          })).toString("base64url")
-        : null;
-      return res.status(200).json({ records, nextCursor });
-    } catch (error) {
-      console.error("Failed to read Firestore measurements:", error.message);
-      return res.status(500).json({ error: "Could not read measurements" });
-    }
-  }
+          }),
+        ).toString("base64url")
+      : null;
+  return res.status(200).json({ records, nextCursor });
+}
 
-  if (req.method !== "POST") {
-    res.setHeader("Allow", "GET, POST");
-    return res.status(405).json({ error: "Method not allowed" });
-  }
-
-  if (!hasValidToken(req)) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
+async function saveMeasurements(db, req, res) {
   const isBatch = Array.isArray(req.body?.records);
   const records = isBatch ? req.body.records : [req.body];
   if (
@@ -219,8 +215,7 @@ module.exports = async function handler(req, res) {
     });
   }
 
-  try {
-    const db = getDatabase();
+  if (hasValidPublicToken(req)) {
     const collection = db.collection("mediciones");
     const batch = db.batch();
     const documents = records.map((record) => {
@@ -231,14 +226,83 @@ module.exports = async function handler(req, res) {
       return document;
     });
     await batch.commit();
-
     return res.status(201).json({
       ids: documents.map((document) => document.id),
       saved: true,
       count: documents.length,
+      scope: "public-demo",
     });
+  }
+
+  const device = await authenticateDevice(req, db);
+  res.setHeader("Cache-Control", "private, no-store");
+  const deviceRef = db
+    .doc(`organizaciones/${device.organizacionId}/dispositivos/${device.dispositivoId}`);
+  const deviceSnapshot = await deviceRef.get();
+  if (!deviceSnapshot.exists || deviceSnapshot.data().activo !== true) {
+    return res.status(403).json({ error: "Device is not active" });
+  }
+  if (records.some((record) => record.sensorId !== device.dispositivoId)) {
+    return res.status(403).json({ error: "Measurement device does not match credential" });
+  }
+
+  const collection = db
+    .collection("organizaciones")
+    .doc(device.organizacionId)
+    .collection("mediciones");
+  const batch = db.batch();
+  const documents = records.map((record) => {
+    const sourceRecordId = record.recordId || randomUUID();
+    const measurement = toFirestoreMeasurement(record);
+    const document = collection.doc(`${device.dispositivoId}__${sourceRecordId}`);
+    batch.set(document, measurement);
+    if (deviceSnapshot.data().publicarEnDemo === true) {
+      batch.set(
+        db
+          .collection("mediciones")
+          .doc(`demo__${device.organizacionId}__${device.dispositivoId}__${sourceRecordId}`),
+        measurement,
+      );
+    }
+    return document;
+  });
+  batch.update(deviceRef, {
+    ultimoContacto: Timestamp.now(),
+    ultimaMedicion: toFirestoreMeasurement(records.at(-1)),
+  });
+  await batch.commit();
+  return res.status(201).json({
+    ids: documents.map((document) => document.id),
+    saved: true,
+    count: documents.length,
+    scope: "organizacion",
+  });
+}
+
+module.exports = async function handler(req, res) {
+  let db;
+  try {
+    db = getDatabase();
   } catch (error) {
-    console.error("Failed to save Firestore measurement:", error.message);
-    return res.status(500).json({ error: "Could not save measurement" });
+    return sendError(res, error);
+  }
+  if (req.method === "GET") {
+    try {
+      return await readPage(db, req, res);
+    } catch (error) {
+      return sendError(res, error);
+    }
+  }
+  if (req.method !== "POST") {
+    res.setHeader("Allow", "GET, POST");
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+  if (!hasValidPublicToken(req) && !req.headers.authorization) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  try {
+    return await saveMeasurements(db, req, res);
+  } catch (error) {
+    return sendError(res, error);
   }
 };

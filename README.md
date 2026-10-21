@@ -79,7 +79,9 @@ La base no guarda un documento por cada lectura de cinco segundos: guarda un res
 
 URL publica: https://solemne-1-ti.vercel.app
 
-`index.html` es el panel publico del proyecto. Consulta hasta 100 agregados recientes y permite filtrar historicos por fechas. Muestra el estado, distancia promedio, muestras y una grafica de distancia. La API permite una lectura publica y de solo lectura, mientras que las escrituras desde la Raspberry requieren `API_TOKEN`. `FIREBASE_SERVICE_ACCOUNT_JSON` debe estar configurada como variable de entorno protegida en Vercel.
+`index.html` es el panel publico del proyecto. Consulta los agregados recientes y permite filtrar historicos por fecha y hora. Muestra estado, distancia promedio, cantidad de muestras y una grafica. La consulta empieza con 100 resultados y el boton **Cargar mas resultados** obtiene paginas siguientes hasta completar el rango elegido. La API permite lectura publica y de solo lectura; las escrituras desde la Raspberry requieren `API_TOKEN`. `FIREBASE_SERVICE_ACCOUNT_JSON` debe mantenerse como variable de entorno protegida en Vercel.
+
+El usuario confirmo que el panel publico carga datos reales de Firestore en produccion el 20 de octubre de 2026. La version verificada mostro los 100 agregados mas recientes. La paginacion del historico se incorporo despues; confirmar que la ultima implementacion de Vercel este en estado `Ready` antes de afirmar que esa version esta publicada.
 
 ### Endpoints de la API
 
@@ -136,7 +138,7 @@ El trabajo de hoy deja evidencia de la ruta ultrasónica hasta Firestore, pero *
 
 1. El IR esta detenido porque dio activaciones falsas sin movimiento. Segun la aclaracion del profesor, no es necesario que funcione para esta entrega; mantener sus conteos fuera de los resultados validos.
 2. Los lectores GPIO se ejecutan como servicios systemd en el host de la Pi, no como contenedores. Esta solucion permitio usar los paquetes GPIO ya instalados y evitar el repositorio APT rechazado, pero debe revisarse contra el requisito de contenedorizacion con el docente o adaptarse de forma segura.
-3. La interfaz web, autenticacion/roles, configuracion remota del dispositivo y otros requisitos de plataforma deben verificarse por separado; esta bitacora solo documenta la adquisicion y sincronizacion comprobadas.
+3. La interfaz publica basica ya muestra mediciones y el codigo incluye consulta historica paginada. Siguen pendientes la autenticacion con dos roles, el aislamiento por organizacion, las alertas, la gestion de dispositivos y la configuracion remota; verificar tambien el despliegue de la ultima version en Vercel.
 4. La Pi disponible es una Raspberry Pi 4; el enunciado menciona Pi 3. Confirmar con el docente que la Pi 4 es aceptada como equivalente.
 5. El usuario declaro el inicio de la recoleccion ultrasónica el 15 de octubre a las 18:35 (UTC-3); el IR permanece detenido y no forma parte de estos datos validos. Anotar paradas, cortes de red, reinicios y pruebas con objetos. Si no se alcanza la meta de siete dias y se generan datos dummy, etiquetarlos y analizarlos por separado como simulados. Si hubo una interrupcion, informar el tiempo real de operacion continua y no describirlo como siete dias continuos. Las pruebas controladas no deben describirse como ocupacion real.
 6. Al terminar, exportar los datos, contar registros y huecos, comparar consumo real de Firebase/Vercel con estimaciones y preparar graficos/conclusiones.

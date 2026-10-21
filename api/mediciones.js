@@ -1,4 +1,4 @@
-const { initializeApp, getApps, cert } = require("firebase-admin/app");
+gconst { initializeApp, getApps, cert } = require("firebase-admin/app");
 const { FieldPath, getFirestore, Timestamp } = require("firebase-admin/firestore");
 const { timingSafeEqual } = require("node:crypto");
 
@@ -187,6 +187,10 @@ module.exports = async function handler(req, res) {
             id: last.id,
           })).toString("base64url")
         : null;
+      res.setHeader(
+        "Cache-Control",
+        "public, max-age=0, s-maxage=60, stale-while-revalidate=300",
+      );
       return res.status(200).json({ records, nextCursor });
     } catch (error) {
       console.error("Failed to read Firestore measurements:", error.message);

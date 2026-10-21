@@ -8,6 +8,12 @@ The deployment follows the assignment's microservice flow:
 - Synchronization sends up to five minute records per API request.
 - Failed uploads remain in a persistent SQLite outbox and are retried.
 
+Docker Compose runs these three services on the Raspberry Pi:
+`mqtt` (broker), `procesamiento` (aggregation), and `sincronizacion` (API
+batch uploads). The two GPIO acquisition programs remain separate systemd
+services because they need direct access to the Pi's GPIO hardware; they are
+not additional Compose services.
+
 The default ultrasonic sampling interval is configurable and set to 5 seconds.
 That yields up to 12 ultrasonic readings per minute and 1,440 Firestore
 aggregate documents per day. A five-record batch normally means about 288 API
@@ -69,12 +75,19 @@ object blocks the sensor. If it is logged when the object is removed, change
 sudo systemctl restart estacionamiento-adquisicion-ir.service
 ```
 
-Confirm distance readings appear, then check processing and synchronization:
+Confirm distance readings appear, then check all three Compose services:
 
 ```sh
-sudo docker compose ps
-sudo docker compose logs --tail=50 procesamiento sincronizacion
+sudo docker compose ps --all
+sudo docker compose logs --tail=50 mqtt procesamiento sincronizacion
 ```
+
+`docker compose ps --all` should list `estacionamiento-mqtt`,
+`estacionamiento-procesamiento`, and `estacionamiento-sincronizacion` as
+running. The broker should report `healthy`; the worker health checks verify
+that each container can reach the broker. Confirm actual data flow in the logs:
+processing should report live readings and minute aggregates, and
+synchronization should report `Uploaded batch of ... minute records`.
 
 Within five minutes, synchronization should upload a batch and Firestore
 should contain minute aggregates. The API token is sent as a Bearer token and
@@ -86,6 +99,62 @@ sudo docker compose exec sincronizacion python3 -c "import sqlite3; c=sqlite3.co
 
 An empty retry queue is expected when connectivity is working. Do not start
 the seven-day measurement until these checks succeed.
+
+## Service status and recovery
+
+Compose containers use `restart: unless-stopped`, and the GPIO systemd
+services use `Restart=on-failure`; they restart after a crash or Pi reboot
+unless they were explicitly stopped.
+
+Run these commands from the deployment directory on the Pi to check the three
+containers and follow their logs:
+
+```sh
+sudo docker compose ps --all
+sudo docker compose logs --tail=100 mqtt procesamiento sincronizacion
+sudo docker compose logs --follow procesamiento sincronizacion
+```
+
+For an unhealthy or stopped service, inspect its logs first, then restart only
+that service:
+
+```sh
+sudo docker compose restart mqtt
+sudo docker compose restart procesamiento
+sudo docker compose restart sincronizacion
+```
+
+After changing application code or the Dockerfile, rebuild and recreate the
+affected worker:
+
+```sh
+sudo docker compose up -d --build procesamiento sincronizacion
+```
+
+To start or recover the complete Compose deployment, validate the configuration
+and bring all three services up:
+
+```sh
+sudo docker compose config --quiet
+sudo docker compose up -d
+sudo docker compose ps --all
+```
+
+The sensor acquisition services are managed independently. Check and recover
+them with systemd:
+
+```sh
+sudo systemctl status estacionamiento-adquisicion-ir.service estacionamiento-adquisicion-ultrasonico.service --no-pager
+sudo systemctl restart estacionamiento-adquisicion-ir.service
+sudo systemctl restart estacionamiento-adquisicion-ultrasonico.service
+```
+
+If API connectivity fails, synchronization retains queued records in the
+persistent `sync_data` volume and retries automatically. Check its logs and
+pending count, restore connectivity, and restart `sincronizacion` if needed.
+Do not remove Compose volumes when recovering: deleting `sync_data` discards
+records waiting to be uploaded, and deleting `mqtt_data` removes broker
+persistence.
 
 After the sensor and upload checks succeed, record the start time and check
 the running services:

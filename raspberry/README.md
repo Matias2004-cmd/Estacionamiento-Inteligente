@@ -1,54 +1,64 @@
-# Raspberry Pi data collection
+# Recolección de datos con Raspberry Pi
 
-The deployment follows the assignment's microservice flow:
+El despliegue sigue el flujo de microservicios del proyecto:
 
-- Ultrasonic and IR acquisition run as Raspberry Pi systemd services and
-  publish readings/events to the local MQTT broker.
-- Processing validates readings and creates one aggregate per minute.
-- Synchronization sends up to five minute records per API request.
-- Failed uploads remain in a persistent SQLite outbox and are retried.
+- La adquisición ultrasónica y la de infrarrojo (IR) se ejecutan como
+  servicios `systemd` en la Raspberry Pi y publican lecturas y eventos en el
+  broker MQTT local.
+- El servicio de procesamiento valida las lecturas y genera un agregado por
+  minuto.
+- El servicio de sincronización envía hasta cinco registros por solicitud a
+  la API.
+- Si falla el envío, los registros permanecen en una cola SQLite persistente
+  y se reintentan.
 
-The default ultrasonic sampling interval is configurable and set to 5 seconds.
-That yields up to 12 ultrasonic readings per minute and 1,440 Firestore
-aggregate documents per day. A five-record batch normally means about 288 API
-requests per day. IR contributes event counts to the minute aggregate.
+El intervalo de muestreo ultrasónico se puede configurar y su valor inicial es
+de 5 segundos. Esto permite obtener hasta 12 lecturas ultrasónicas por minuto
+y guardar 1.440 documentos agregados en Firestore por día. Los lotes de cinco
+registros representan normalmente unas 288 solicitudes a la API por día. El
+sensor IR está detenido porque produjo activaciones falsas; sus eventos no
+deben considerarse mediciones válidas.
 
-## Configuration
+## Configuración
 
-Copy `.env.example` to `.env` on the Raspberry Pi. Set
-`DISTANCIA_LIBRE_CM` to the measured empty-space distance. Set
-`IR_ACTIVE_LEVEL` to `0` or `1` according to the already-tested IR module
-output when an object blocks it. Keep both secret files outside this folder:
+Copia `.env.example` como `.env` en la Raspberry Pi. Configura
+`DISTANCIA_LIBRE_CM` con la distancia medida cuando el espacio está vacío.
+Configura `IR_ACTIVE_LEVEL` en `0` o `1`, según el valor de salida previamente
+comprobado en el módulo IR cuando un objeto bloquea el sensor. No guardes los
+archivos secretos dentro de esta carpeta:
 
 - `/home/matiascatalan/.config/estacionamiento/api-token.txt`
 - `/home/matiascatalan/.config/estacionamiento/vercel-bypass.txt`
 
-Docker Compose mounts those files as runtime secrets; their values are not
-stored in this project or in the container image.
+Docker Compose monta esos archivos como secretos durante la ejecución. Sus
+valores no se guardan en este proyecto ni en la imagen del contenedor.
 
-## Remote device configuration
+## Configuración remota del dispositivo
 
-Set `ADMIN_API_TOKEN` as a protected Vercel environment variable and deploy the
-API. In the web dashboard, enter that token and the device ID
-(`raspberry-pi-1` by default), then change the measured free-space distance
-and/or ultrasonic sampling interval. The browser sends the token only with the
-configuration request and does not store it.
+Configura `ADMIN_API_TOKEN` como una variable de entorno protegida en Vercel y
+despliega la API. En el panel web, ingresa ese token y el identificador del
+dispositivo (`raspberry-pi-1` de forma predeterminada). Luego puedes cambiar la
+distancia medida del espacio vacío y/o el intervalo de muestreo ultrasónico.
+El navegador envía el token únicamente con la solicitud de configuración y no
+lo almacena.
 
-The synchronization service polls the configuration endpoint every 60 seconds
-using the device `API_TOKEN`. It publishes changes to the retained MQTT topic
-`configuracion/<device-id>`. The processing service updates the free-space
-threshold, and the ultrasonic systemd service updates its sampling interval
-without restarting. Mosquitto persistence keeps the latest values available
-across broker restarts. Valid ranges are 5–200 cm and 0.1–3600 seconds.
+El servicio de sincronización consulta el endpoint de configuración cada 60
+segundos con el `API_TOKEN` del dispositivo. Publica los cambios en el tópico
+MQTT retenido `configuracion/<device-id>`. El servicio de procesamiento
+actualiza el umbral de espacio libre y el servicio `systemd` ultrasónico
+actualiza su intervalo de muestreo sin reiniciarse. La persistencia de
+Mosquitto conserva los últimos valores disponibles si se reinicia el broker.
+Los rangos válidos son de 5 a 200 cm y de 0,1 a 3.600 segundos.
 
-The values in the Raspberry `.env` remain the startup defaults until remote
-values are saved for the device. Updating source files or secrets still
-requires its normal deployment/restart procedure; changing dashboard values
-does not.
+Los valores del archivo `.env` de la Raspberry siguen siendo los valores
+iniciales hasta que se guarde una configuración remota para ese dispositivo.
+Actualizar el código fuente o los secretos todavía requiere el procedimiento
+habitual de despliegue o reinicio; los cambios realizados desde el panel no.
 
-## Installation and smoke tests
+## Instalación y pruebas básicas
 
-Run these commands from `/home/matiascatalan/estacionamiento` on the Pi:
+Ejecuta estos comandos en la Raspberry Pi, desde
+`/home/matiascatalan/estacionamiento`:
 
 ```sh
 unzip -o ~/estacionamiento-raspberry.zip -d ~/estacionamiento
@@ -56,15 +66,15 @@ cp -n .env.example .env
 nano .env
 sudo apt update
 sudo apt install -y python3-gpiozero python3-lgpio python3-paho-mqtt
-python3 -c "import gpiozero, lgpio, paho.mqtt.client; print('GPIO and MQTT dependencies ready')"
+python3 -c "import gpiozero, lgpio, paho.mqtt.client; print('GPIO y dependencias MQTT listas')"
 docker compose config --quiet
 sudo docker compose build
 sudo docker compose up -d mqtt procesamiento sincronizacion
 ```
 
-GPIO acquisition runs on the Pi host because the system's signature-verified
-GPIO packages provide access to `/dev/gpiochip0`. Install and start the systemd
-units:
+La adquisición por GPIO se ejecuta en el sistema operativo de la Raspberry,
+porque los paquetes GPIO verificados mediante firma del sistema permiten
+acceder a `/dev/gpiochip0`. Instala e inicia las unidades `systemd`:
 
 ```sh
 sudo install -m 0644 systemd/estacionamiento-adquisicion-ultrasonico.service /etc/systemd/system/
@@ -74,48 +84,48 @@ sudo systemctl enable --now estacionamiento-adquisicion-ultrasonico.service esta
 sudo systemctl status estacionamiento-adquisicion-ultrasonico.service estacionamiento-adquisicion-ir.service --no-pager
 ```
 
-Check sensor logs:
+Consulta los registros de adquisición ultrasónica:
 
 ```sh
-sudo journalctl -u estacionamiento-adquisicion-ir.service -n 30 --no-pager
 sudo journalctl -u estacionamiento-adquisicion-ultrasonico.service -n 30 --no-pager
 ```
 
-Block and unblock the IR sensor once. Confirm one event is logged when the
-object blocks the sensor. If it is logged when the object is removed, change
-`IR_ACTIVE_LEVEL` in `.env` from `0` to `1` (or vice versa), then restart:
+El servicio IR se mantiene detenido: en las pruebas generó activaciones
+repetidas sin movimiento y esos eventos no son confiables. No lo inicies ni
+incluyas sus registros como mediciones válidas sin haber corregido y vuelto a
+validar el sensor.
 
-```sh
-sudo systemctl restart estacionamiento-adquisicion-ir.service
-```
-
-Confirm distance readings appear, then check processing and synchronization:
+Comprueba que aparezcan lecturas de distancia y revisa el procesamiento y la
+sincronización:
 
 ```sh
 sudo docker compose ps
 sudo docker compose logs --tail=50 procesamiento sincronizacion
 ```
 
-Within five minutes, synchronization should upload a batch and Firestore
-should contain minute aggregates. The API token is sent as a Bearer token and
-the Vercel bypass uses its dedicated header. Check the persistent retry queue:
+En un plazo de cinco minutos, el servicio de sincronización debería subir un
+lote y Firestore debería contener agregados por minuto. El token de la API se
+envía en el encabezado de autorización y el acceso protegido de Vercel usa su
+encabezado específico. Comprueba la cola persistente de reintentos:
 
 ```sh
-sudo docker compose exec sincronizacion python3 -c "import sqlite3; c=sqlite3.connect('/var/lib/estacionamiento/outbox.sqlite3'); print('pending records:', c.execute('select count(*) from outbox').fetchone()[0])"
+sudo docker compose exec sincronizacion python3 -c "import sqlite3; c=sqlite3.connect('/var/lib/estacionamiento/outbox.sqlite3'); print('registros pendientes:', c.execute('select count(*) from outbox').fetchone()[0])"
 ```
 
-An empty retry queue is expected when connectivity is working. Do not start
-the seven-day measurement until these checks succeed.
+Si la conexión funciona, se espera que la cola de reintentos esté vacía. No
+inicies la medición de siete días hasta que estas comprobaciones sean
+satisfactorias.
 
-After the sensor and upload checks succeed, record the start time and check
-the running services:
+Cuando las comprobaciones de los sensores y del envío hayan terminado, anota
+la hora de inicio y revisa los servicios activos:
 
 ```sh
 sudo docker compose ps
-sudo systemctl is-active estacionamiento-adquisicion-ultrasonico.service estacionamiento-adquisicion-ir.service
+sudo systemctl is-active estacionamiento-adquisicion-ultrasonico.service
 date -Is
 ```
 
-For the required continuous measurement, keep the Pi powered, connected to
-the network, and running for at least seven days. Check the Firestore
-`mediciones` collection and compare its usage with the estimates above.
+Para cumplir con la medición continua requerida, mantén la Raspberry
+encendida, conectada a la red y en funcionamiento durante al menos siete días.
+Revisa la colección `mediciones` de Firestore y compara su uso con las
+estimaciones anteriores.

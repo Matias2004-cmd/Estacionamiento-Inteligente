@@ -49,6 +49,13 @@ La sincronización consulta los ajustes del dispositivo cada
 `DEVICE_CONFIG_POLL_SECONDS` (30 segundos por defecto) y publica los cambios
 como mensaje MQTT retenido. El procesador aplica la nueva distancia de
 referencia y la adquisición ultrasónica aplica el intervalo de muestreo.
+El sondeo se ejecuta en un hilo independiente, por lo que las llamadas a la
+API de configuración no bloquean el envío normal de lotes. Los cambios que
+realices en la configuración del dispositivo desde el panel privado se
+aplican sin reiniciar la Raspberry ni sus servicios. Esta integración usa la
+credencial del dispositivo y queda aislada de los endpoints globales heredados
+de configuración.
+
 Después de cambiar `DEVICE_ID` o actualizar las unidades de `systemd`, reinicia
 los servicios para que tomen la configuración:
 
@@ -95,7 +102,6 @@ sudo systemctl status estacionamiento-adquisicion-ultrasonico.service estacionam
 Revisa los registros de los sensores:
 
 ```sh
-sudo journalctl -u estacionamiento-adquisicion-ir.service -n 30 --no-pager
 sudo journalctl -u estacionamiento-adquisicion-ultrasonico.service -n 30 --no-pager
 ```
 
@@ -200,7 +206,7 @@ anota la hora de inicio y comprueba los servicios en ejecución:
 
 ```sh
 sudo docker compose ps
-sudo systemctl is-active estacionamiento-adquisicion-ultrasonico.service estacionamiento-adquisicion-ir.service
+sudo systemctl is-active estacionamiento-adquisicion-ultrasonico.service
 date -Is
 ```
 

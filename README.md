@@ -110,6 +110,18 @@ Firestore antes de habilitar el acceso privado.
 
 | Metodo y ruta | Acceso | Funcion |
 | --- | --- | --- |
+| `GET /api/configuracion?deviceId=<id>` | Token del dispositivo (`API_TOKEN`) | Recupera la configuracion remota del dispositivo sin cache. |
+| `POST /api/configuracion` | Token administrativo (`ADMIN_API_TOKEN`) | Actualiza parcialmente distancia libre (5–200 cm) y/o intervalo de muestreo (0.1–3600 s) en `configuracion_dispositivos`. |
+
+Las rutas `/api/configuracion` se conservan para compatibilidad con clientes
+anteriores y usan `ADMIN_API_TOKEN` para cambios. El panel actual administra
+los dispositivos autenticados dentro de una organización; su configuración
+remota llega a la Raspberry sin reiniciar los servicios. Los valores de `.env`
+son los valores iniciales mientras no exista configuración remota para el
+dispositivo. Solo se aplican ajustes ultrasónicos; no activan ni modifican IR.
+
+| Metodo y ruta | Acceso | Funcion |
+| --- | --- | --- |
 | `GET /api/mediciones?limit=100&from=<ISO-8601>&to=<ISO-8601>&cursor=<token>` | Publico, solo lectura | Devuelve una pagina de agregados ordenados por periodo descendente, con un cursor opaco para la pagina siguiente. `from` y `to` son opcionales e inclusivos; el panel solicita paginas de 100 hasta completar el rango. La API limita cada pagina a 500. |
 | `POST /api/mediciones` | `Authorization: Bearer <API_TOKEN>` | Valida y guarda una medicion o un lote de hasta 100 registros en Firestore. Los lotes requieren `recordId` unico por registro. |
 
@@ -131,8 +143,9 @@ Rutas adicionales para el panel privado:
 
 1. Habilita **Correo electrónico y contraseña** en Firebase Authentication y
    agrega `solemne-1-ti.vercel.app` a los dominios autorizados.
-2. Configura en Vercel `FIREBASE_PROJECT_ID`, `FIREBASE_WEB_API_KEY` y
-   `FIREBASE_SERVICE_ACCOUNT_JSON`; `FIREBASE_AUTH_DOMAIN` es opcional. La
+2. Configura en Vercel `FIREBASE_PROJECT_ID`, `FIREBASE_WEB_API_KEY`,
+   `FIREBASE_WEB_APP_ID` y `FIREBASE_SERVICE_ACCOUNT_JSON`;
+   `FIREBASE_AUTH_DOMAIN` es opcional. La
    cuenta de servicio es privada; la clave web es configuración pública del
    cliente.
 3. Publica `firestore.rules` desde Firebase Console o ejecuta
@@ -146,6 +159,10 @@ Rutas adicionales para el panel privado:
    configura dispositivos. Comparte los enlaces para establecer contraseñas
    por un canal privado y guarda el token del dispositivo como secreto en la
    Raspberry. El token se muestra una sola vez.
+
+La consulta `GET /api/mediciones` aplica cache compartida durante 60 segundos, con hasta 5 minutos de revalidacion en segundo plano. Solo se cachean respuestas GET exitosas; las escrituras POST no se cachean. Esto reduce lecturas repetidas de Firestore para la misma URL. Los datos recientes pueden tardar hasta un minuto en actualizarse y, durante la revalidacion, se puede servir una respuesta anterior.
+
+Cuando se restablezca la cuota de Firestore, abre el panel y confirma que se muestren mediciones y que `GET /api/mediciones?limit=1` responda con HTTP 200 y un arreglo `records`. Si la pagina sigue mostrando un error, espera al menos un minuto y vuelve a consultar; si persiste, revisa los logs de la funcion en Vercel y la cuota/estado de Firestore. Evita recargar repetidamente durante la cuota agotada.
 
 El proyecto Vercel se conecta al repositorio GitHub en la rama `main`. Para cada cambio aceptado, revisar **Deployments** y confirmar que la implementacion de produccion quede en estado `Ready` antes de compartir la URL.
 

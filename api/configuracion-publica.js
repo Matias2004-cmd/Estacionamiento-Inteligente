@@ -6,7 +6,8 @@ module.exports = function handler(req, res) {
 
   const projectId = process.env.FIREBASE_PROJECT_ID;
   const apiKey = process.env.FIREBASE_WEB_API_KEY;
-  if (!projectId || !apiKey) {
+  const appId = process.env.FIREBASE_WEB_APP_ID;
+  if (!projectId || !apiKey || !appId) {
     return res.status(503).json({ error: "Firebase web configuration is missing" });
   }
 
@@ -14,5 +15,6 @@ module.exports = function handler(req, res) {
     apiKey,
     authDomain: process.env.FIREBASE_AUTH_DOMAIN || `${projectId}.firebaseapp.com`,
     projectId,
+    appId,
   });
 };

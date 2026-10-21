@@ -16,11 +16,13 @@ logging.basicConfig(
 )
 stopping = False
 lock = threading.Lock()
+config_stop_event = threading.Event()
 
 
 def stop_service(_signum, _frame):
     global stopping
     stopping = True
+    config_stop_event.set()
 
 
 def read_secret(path):
@@ -114,32 +116,25 @@ def main():
     client.connect(os.environ.get("MQTT_HOST", "mqtt"), 1883, 60)
     client.loop_start()
     logging.info("Synchronization started; outbox=%s", outbox_path)
-    next_config_poll = 0
-    current_config = None
+    config_worker = threading.Thread(
+        target=poll_remote_config,
+        args=(
+            client,
+            config_url,
+            config_topic,
+            device_id,
+            token,
+            bypass,
+            config_poll_seconds,
+        ),
+        name="remote-config-poll",
+        daemon=True,
+    )
 
     try:
+        config_worker.start()
         while not stopping:
             now = time.time()
-            if now >= next_config_poll:
-                try:
-                    remote_config = fetch_device_config(config_url, token, bypass)
-                    if remote_config != current_config:
-                        publish_result = client.publish(
-                            config_topic,
-                            json.dumps(remote_config),
-                            qos=1,
-                            retain=True,
-                        )
-                        if publish_result.rc != mqtt.MQTT_ERR_SUCCESS:
-                            raise RuntimeError(
-                                f"Could not publish device configuration: MQTT code {publish_result.rc}"
-                            )
-                        current_config = remote_config
-                        logging.info("Remote device configuration applied to local MQTT")
-                except (HTTPError, URLError, TimeoutError, RuntimeError, ValueError) as error:
-                    logging.warning("Could not refresh remote device configuration: %s", error)
-                next_config_poll = now + config_poll_seconds
-
             with lock:
                 rows = database.execute(
                     """
@@ -164,10 +159,82 @@ def main():
                 send_batch(database, rows, api_url, token, bypass)
             time.sleep(2)
     finally:
+        config_stop_event.set()
+        config_worker.join(timeout=12)
         client.loop_stop()
         client.disconnect()
         database.close()
         logging.info("Synchronization stopped")
+
+
+def poll_remote_config(
+    client,
+    config_url,
+    config_topic,
+    device_id,
+    token,
+    bypass,
+    poll_seconds,
+):
+    last_config_payload = None
+    while not config_stop_event.is_set():
+        try:
+            remote_config = fetch_device_config(
+                config_url,
+                device_id,
+                token,
+                bypass,
+            )
+            serialized_config = json.dumps(remote_config, sort_keys=True)
+            if serialized_config != last_config_payload:
+                result = client.publish(
+                    config_topic,
+                    serialized_config,
+                    qos=1,
+                    retain=True,
+                )
+                if result.rc == mqtt.MQTT_ERR_SUCCESS:
+                    last_config_payload = serialized_config
+                    logging.info("Published updated remote device configuration")
+                else:
+                    logging.error(
+                        "Could not publish remote configuration: MQTT code %s",
+                        result.rc,
+                    )
+        except (HTTPError, URLError, TimeoutError, RuntimeError, ValueError) as error:
+            logging.error("Could not refresh remote configuration: %s", error)
+
+        if config_stop_event.wait(poll_seconds):
+            break
+
+
+def fetch_device_config(config_url, device_id, token, bypass):
+    request = Request(
+        config_url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "x-vercel-protection-bypass": bypass,
+            "Accept": "application/json",
+        },
+    )
+    with urlopen(request, timeout=10) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    if response.status != 200 or not isinstance(result, dict):
+        raise RuntimeError("Configuration API returned an unexpected response")
+    if result.get("deviceId") != device_id:
+        raise ValueError("Configuration response is for a different device")
+    settings = result.get("settings")
+    if (
+        not isinstance(settings, dict)
+        or not isinstance(settings.get("distanciaLibreCm"), (int, float))
+        or isinstance(settings.get("distanciaLibreCm"), bool)
+        or not 5 <= settings["distanciaLibreCm"] <= 200
+        or not isinstance(settings.get("intervaloMuestreoSegundos"), (int, float))
+        or isinstance(settings.get("intervaloMuestreoSegundos"), bool)
+        or not 0.1 <= settings["intervaloMuestreoSegundos"] <= 3600
+    ):
+        raise ValueError("Device configuration response is invalid")
+    return {"deviceId": device_id, **settings}
 
 
 def send_batch(database, rows, api_url, token, bypass):
@@ -212,35 +279,6 @@ def send_batch(database, rows, api_url, token, bypass):
                 """,
                 updates,
             )
-
-
-def fetch_device_config(config_url, token, bypass):
-    request = Request(
-        config_url,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "x-vercel-protection-bypass": bypass,
-            "Accept": "application/json",
-        },
-        method="GET",
-    )
-    with urlopen(request, timeout=15) as response:
-        result = json.loads(response.read().decode("utf-8"))
-        if not isinstance(result, dict):
-            raise ValueError("Device configuration response is invalid")
-        settings = result.get("settings")
-        if (
-            response.status != 200
-            or not isinstance(settings, dict)
-            or not isinstance(settings.get("distanciaLibreCm"), (int, float))
-            or isinstance(settings.get("distanciaLibreCm"), bool)
-            or not 5 <= settings["distanciaLibreCm"] <= 200
-            or not isinstance(settings.get("intervaloMuestreoSegundos"), (int, float))
-            or isinstance(settings.get("intervaloMuestreoSegundos"), bool)
-            or not 0.1 <= settings["intervaloMuestreoSegundos"] <= 3600
-        ):
-            raise ValueError("Device configuration response is invalid")
-    return settings
 
 
 if __name__ == "__main__":

@@ -15,14 +15,19 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
 )
 stopping = False
+interval_lock = threading.Lock()
+wake_event = threading.Event()
+sample_interval = 5.0
 
 
 def stop_service(_signum, _frame):
     global stopping
     stopping = True
+    wake_event.set()
 
 
 def main():
+    global sample_interval
     signal.signal(signal.SIGTERM, stop_service)
     signal.signal(signal.SIGINT, stop_service)
 

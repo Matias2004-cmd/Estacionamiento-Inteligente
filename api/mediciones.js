@@ -195,6 +195,12 @@ async function readPage(db, req, res) {
           }),
         ).toString("base64url")
       : null;
+  if (scope !== "organizacion") {
+    res.setHeader(
+      "Cache-Control",
+      "public, max-age=0, s-maxage=60, stale-while-revalidate=300",
+    );
+  }
   return res.status(200).json({ records, nextCursor });
 }
 

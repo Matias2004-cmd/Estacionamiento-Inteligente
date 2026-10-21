@@ -19,6 +19,7 @@ state = "LIBRE"
 candidate = "LIBRE"
 candidate_count = 0
 last_sample_ids = set()
+free_reference = 23.0
 
 
 def stop_service(_signum, _frame):
@@ -104,7 +105,7 @@ def flush_bucket(client, current, device_id):
 
 
 def main():
-    global stopping
+    global stopping, free_reference
     signal.signal(signal.SIGTERM, stop_service)
     signal.signal(signal.SIGINT, stop_service)
 
@@ -115,7 +116,6 @@ def main():
 
     sample_topic = os.environ.get("MQTT_SAMPLE_TOPIC", "sensores/ultrasonico")
     ir_topic = os.environ.get("MQTT_IR_TOPIC", "sensores/ir")
-    device_id = os.environ.get("DEVICE_ID", "raspberry-pi-1")
     config_topic = f"estacionamiento/config/dispositivos/{device_id}"
     settings = {"distanciaLibreCm": free_reference}
     client = mqtt.Client(

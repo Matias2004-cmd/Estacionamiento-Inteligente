@@ -87,6 +87,15 @@ El usuario confirmo que el panel publico carga datos reales de Firestore en prod
 
 | Metodo y ruta | Acceso | Funcion |
 | --- | --- | --- |
+| `GET /api/configuracion?deviceId=<id>` | Token del dispositivo (`API_TOKEN`) | Recupera la configuracion remota del dispositivo sin cache. |
+| `POST /api/configuracion` | Token administrativo (`ADMIN_API_TOKEN`) | Actualiza parcialmente distancia libre (5–200 cm) y/o intervalo de muestreo (0.1–3600 s) en `configuracion_dispositivos`. |
+
+La seccion **Configuracion remota del dispositivo** del panel aplica los parametros sin reiniciar. Configura `ADMIN_API_TOKEN` como variable de entorno protegida en Vercel y despliega la API. La Raspberry consulta la configuracion cada 60 segundos con su `API_TOKEN`; el servicio de sincronizacion la publica como mensaje MQTT retenido y los servicios de adquisicion/procesamiento actualizan sus valores activos. El intervalo y la referencia de distancia siguen vigentes despues de reinicios. El panel solicita el token administrativo al enviar el cambio, no lo guarda en el navegador; introducelo solo en una conexion HTTPS confiable y rotalo si se expone.
+
+Los ajustes de arranque de `.env` siguen siendo los valores iniciales y aplican hasta que exista una configuracion remota para el dispositivo. La configuracion remota solo soporta el sensor ultrasonico: no habilita ni modifica el sensor IR.
+
+| Metodo y ruta | Acceso | Funcion |
+| --- | --- | --- |
 | `GET /api/mediciones?limit=100&from=<ISO-8601>&to=<ISO-8601>&cursor=<token>` | Publico, solo lectura | Devuelve una pagina de agregados ordenados por periodo descendente, con un cursor opaco para la pagina siguiente. `from` y `to` son opcionales e inclusivos; el panel solicita paginas de 100 hasta completar el rango. La API limita cada pagina a 500. |
 | `POST /api/mediciones` | `Authorization: Bearer <API_TOKEN>` | Valida y guarda una medicion o un lote de hasta 100 registros en Firestore. Los lotes requieren `recordId` unico por registro. |
 
@@ -142,7 +151,7 @@ El trabajo de hoy deja evidencia de la ruta ultrasónica hasta Firestore, pero *
 
 1. El IR esta detenido porque dio activaciones falsas sin movimiento. Segun la aclaracion del profesor, no es necesario que funcione para esta entrega; mantener sus conteos fuera de los resultados validos.
 2. Los lectores GPIO se ejecutan como servicios systemd en el host de la Pi, no como contenedores. Esta solucion permitio usar los paquetes GPIO ya instalados y evitar el repositorio APT rechazado, pero debe revisarse contra el requisito de contenedorizacion con el docente o adaptarse de forma segura.
-3. La interfaz publica basica ya muestra mediciones y el codigo incluye consulta historica paginada. Siguen pendientes la autenticacion con dos roles, el aislamiento por organizacion, las alertas, la gestion de dispositivos y la configuracion remota; verificar tambien el despliegue de la ultima version en Vercel.
+3. La interfaz publica muestra mediciones, consulta historicos y permite cambiar remotamente la distancia de referencia y el intervalo ultrasónico. Siguen pendientes la autenticacion con dos roles, el aislamiento por organizacion, las alertas y la gestion completa del ciclo de vida de dispositivos/tokens; desplegar y verificar la ultima version en Vercel.
 4. La Pi disponible es una Raspberry Pi 4; el enunciado menciona Pi 3. Confirmar con el docente que la Pi 4 es aceptada como equivalente.
 5. El usuario declaro el inicio de la recoleccion ultrasónica el 15 de octubre a las 18:35 (UTC-3); el IR permanece detenido y no forma parte de estos datos validos. Anotar paradas, cortes de red, reinicios y pruebas con objetos. Si no se alcanza la meta de siete dias y se generan datos dummy, etiquetarlos y analizarlos por separado como simulados. Si hubo una interrupcion, informar el tiempo real de operacion continua y no describirlo como siete dias continuos. Las pruebas controladas no deben describirse como ocupacion real.
 6. Al terminar, exportar los datos, contar registros y huecos, comparar consumo real de Firebase/Vercel con estimaciones y preparar graficos/conclusiones.

@@ -6,6 +6,7 @@ import sqlite3
 import threading
 import time
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import paho.mqtt.client as mqtt
@@ -16,11 +17,13 @@ logging.basicConfig(
 )
 stopping = False
 lock = threading.Lock()
+config_stop_event = threading.Event()
 
 
 def stop_service(_signum, _frame):
     global stopping
     stopping = True
+    config_stop_event.set()
 
 
 def read_secret(path):
@@ -40,10 +43,18 @@ def main():
     api_url = os.environ["API_URL"]
     batch_size = int(os.environ.get("BATCH_SIZE", "5"))
     max_wait = int(os.environ.get("BATCH_MAX_WAIT_SECONDS", "300"))
+    config_poll_seconds = int(os.environ.get("CONFIG_POLL_SECONDS", "60"))
     if not 1 <= batch_size <= 100:
         raise ValueError("BATCH_SIZE must be between 1 and 100")
     if not 1 <= max_wait <= 86400:
         raise ValueError("BATCH_MAX_WAIT_SECONDS must be between 1 and 86400")
+    if not 15 <= config_poll_seconds <= 3600:
+        raise ValueError("CONFIG_POLL_SECONDS must be between 15 and 3600")
+    device_id = os.environ.get("DEVICE_ID", "raspberry-pi-1")
+    config_url = os.environ.get(
+        "CONFIG_URL",
+        f"{api_url.rsplit('/', 1)[0]}/configuracion",
+    )
 
     outbox_path = os.environ.get(
         "OUTBOX_PATH",
@@ -105,8 +116,22 @@ def main():
     client.connect(os.environ.get("MQTT_HOST", "mqtt"), 1883, 60)
     client.loop_start()
     logging.info("Synchronization started; outbox=%s", outbox_path)
+    config_worker = threading.Thread(
+        target=poll_remote_config,
+        args=(
+            client,
+            config_url,
+            device_id,
+            token,
+            bypass,
+            config_poll_seconds,
+        ),
+        name="remote-config-poll",
+        daemon=True,
+    )
 
     try:
+        config_worker.start()
         while not stopping:
             now = time.time()
             with lock:
@@ -133,10 +158,94 @@ def main():
                 send_batch(database, rows, api_url, token, bypass)
             time.sleep(2)
     finally:
+        config_stop_event.set()
+        config_worker.join(timeout=12)
         client.loop_stop()
         client.disconnect()
         database.close()
         logging.info("Synchronization stopped")
+
+
+def poll_remote_config(client, config_url, device_id, token, bypass, poll_seconds):
+    config_topic = f"configuracion/{device_id}"
+    last_config_payload = None
+    while not config_stop_event.is_set():
+        try:
+            remote_config = fetch_device_config(
+                config_url,
+                device_id,
+                token,
+                bypass,
+            )
+            if remote_config is not None:
+                serialized_config = json.dumps(
+                    {"deviceId": device_id, **remote_config},
+                    sort_keys=True,
+                )
+                if serialized_config != last_config_payload:
+                    result = client.publish(
+                        config_topic,
+                        serialized_config,
+                        qos=1,
+                        retain=True,
+                    )
+                    if result.rc == mqtt.MQTT_ERR_SUCCESS:
+                        last_config_payload = serialized_config
+                        logging.info("Published updated remote device configuration")
+                    else:
+                        logging.error(
+                            "Could not publish remote configuration: MQTT code %s",
+                            result.rc,
+                        )
+        except (HTTPError, URLError, TimeoutError, RuntimeError, ValueError) as error:
+            logging.error("Could not refresh remote configuration: %s", error)
+
+        if config_stop_event.wait(poll_seconds):
+            break
+
+
+def fetch_device_config(config_url, device_id, token, bypass):
+    query = urlencode({"deviceId": device_id})
+    request = Request(
+        f"{config_url}?{query}",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "x-vercel-protection-bypass": bypass,
+            "Accept": "application/json",
+        },
+    )
+    with urlopen(request, timeout=10) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    if (
+        response.status != 200
+        or not isinstance(result, dict)
+        or result.get("deviceId") != device_id
+    ):
+        raise RuntimeError("Configuration API returned an unexpected response")
+    config = result.get("config")
+    if config is None:
+        return None
+    if not isinstance(config, dict):
+        raise ValueError("Configuration API returned invalid config")
+
+    validated = {}
+    for key, minimum, maximum in (
+        ("distanciaLibreCm", 5, 200),
+        ("sampleIntervalSeconds", 0.1, 3600),
+    ):
+        value = config.get(key)
+        if value is None:
+            continue
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not minimum <= value <= maximum
+        ):
+            raise ValueError(f"Configuration API returned invalid {key}")
+        validated[key] = value
+    if not validated:
+        return None
+    return validated
 
 
 def send_batch(database, rows, api_url, token, bypass):
@@ -185,4 +294,3 @@ def send_batch(database, rows, api_url, token, bypass):
 
 if __name__ == "__main__":
     main()
-

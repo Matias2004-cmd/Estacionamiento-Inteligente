@@ -1,4 +1,4 @@
-gconst { initializeApp, getApps, cert } = require("firebase-admin/app");
+const { initializeApp, getApps, cert } = require("firebase-admin/app");
 const { FieldPath, getFirestore, Timestamp } = require("firebase-admin/firestore");
 const { timingSafeEqual } = require("node:crypto");
 

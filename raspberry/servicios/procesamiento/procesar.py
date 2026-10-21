@@ -19,6 +19,7 @@ state = "LIBRE"
 candidate = "LIBRE"
 candidate_count = 0
 last_sample_ids = set()
+free_reference = 23.0
 
 
 def stop_service(_signum, _frame):
@@ -104,7 +105,7 @@ def flush_bucket(client, current, device_id):
 
 
 def main():
-    global stopping
+    global stopping, free_reference
     signal.signal(signal.SIGTERM, stop_service)
     signal.signal(signal.SIGINT, stop_service)
 
@@ -115,6 +116,7 @@ def main():
 
     sample_topic = os.environ.get("MQTT_SAMPLE_TOPIC", "sensores/ultrasonico")
     ir_topic = os.environ.get("MQTT_IR_TOPIC", "sensores/ir")
+    config_topic = f"configuracion/{device_id}"
     client = mqtt.Client(
         mqtt.CallbackAPIVersion.VERSION2,
         client_id="procesamiento",
@@ -123,14 +125,38 @@ def main():
 
     def on_connect(connected_client, _userdata, _flags, reason_code, _properties):
         if reason_code == 0:
-            connected_client.subscribe([(sample_topic, 1), (ir_topic, 1)])
+            connected_client.subscribe(
+                [(sample_topic, 1), (ir_topic, 1), (config_topic, 1)]
+            )
             logging.info("Subscribed to sensor MQTT topics")
         else:
             logging.error("MQTT connection failed: %s", reason_code)
 
     def on_message(_client, _userdata, message):
+        global free_reference
         try:
             payload = json.loads(message.payload)
+            if message.topic == config_topic:
+                if not isinstance(payload, dict):
+                    logging.warning("Invalid remote configuration ignored")
+                    return
+                distance = payload.get("distanciaLibreCm")
+                if distance is not None:
+                    if (
+                        not isinstance(distance, (int, float))
+                        or isinstance(distance, bool)
+                        or not 5 <= distance <= 200
+                    ):
+                        logging.warning("Invalid remote free-distance setting ignored")
+                        return
+                    with lock:
+                        free_reference = float(distance)
+                    logging.info(
+                        "Remote free-distance setting applied: %.1f cm",
+                        free_reference,
+                    )
+                return
+
             timestamp_text = payload["timestamp"]
             timestamp = datetime.fromisoformat(
                 timestamp_text.replace("Z", "+00:00")

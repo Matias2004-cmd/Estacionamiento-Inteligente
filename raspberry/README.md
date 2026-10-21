@@ -26,6 +26,26 @@ output when an object blocks it. Keep both secret files outside this folder:
 Docker Compose mounts those files as runtime secrets; their values are not
 stored in this project or in the container image.
 
+## Remote device configuration
+
+Set `ADMIN_API_TOKEN` as a protected Vercel environment variable and deploy the
+API. In the web dashboard, enter that token and the device ID
+(`raspberry-pi-1` by default), then change the measured free-space distance
+and/or ultrasonic sampling interval. The browser sends the token only with the
+configuration request and does not store it.
+
+The synchronization service polls the configuration endpoint every 60 seconds
+using the device `API_TOKEN`. It publishes changes to the retained MQTT topic
+`configuracion/<device-id>`. The processing service updates the free-space
+threshold, and the ultrasonic systemd service updates its sampling interval
+without restarting. Mosquitto persistence keeps the latest values available
+across broker restarts. Valid ranges are 5–200 cm and 0.1–3600 seconds.
+
+The values in the Raspberry `.env` remain the startup defaults until remote
+values are saved for the device. Updating source files or secrets still
+requires its normal deployment/restart procedure; changing dashboard values
+does not.
+
 ## Installation and smoke tests
 
 Run these commands from `/home/matiascatalan/estacionamiento` on the Pi:

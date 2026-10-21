@@ -19,6 +19,10 @@
       .filters { display:flex; flex-wrap:wrap; align-items:end; gap:1rem; }
       .filters label { display:grid; gap:.4rem; color:#607067; font-size:.88rem; }
       .filters input { min-height:2.6rem; border:1px solid #cbd7ce; border-radius:8px; padding:.45rem .6rem; font:inherit; color:#17221d; }
+      .config-form { display:flex; flex-wrap:wrap; align-items:end; gap:1rem; }
+      .config-form label { display:grid; gap:.4rem; color:#607067; font-size:.88rem; }
+      .config-form input { min-height:2.6rem; border:1px solid #cbd7ce; border-radius:8px; padding:.45rem .6rem; font:inherit; color:#17221d; }
+      .config-status { min-height:1.4rem; color:#607067; }
       .load-more { display:block; margin:1rem auto 0; }
       .card, section { background:white; border:1px solid #e1e8e1; border-radius:12px; box-shadow:0 3px 12px #12251e0a; }
       .card { padding:1.2rem; }
@@ -50,6 +54,18 @@
         <div class="card"><span class="label">Registros consultados</span><strong class="value" id="record-count">—</strong></div>
       </div>
       <section><h2>Consultar histórico</h2><form id="filters" class="filters"><label>Desde<input id="from" type="datetime-local" /></label><label>Hasta<input id="to" type="datetime-local" /></label><button type="submit">Consultar rango</button></form></section>
+      <section>
+        <h2>Configuración remota del dispositivo</h2>
+        <p>Los cambios se aplican sin reiniciar, normalmente en menos de un minuto. Requiere el token de administración configurado en Vercel.</p>
+        <form id="device-config" class="config-form">
+          <label>Token de administración<input id="admin-token" type="password" autocomplete="off" required /></label>
+          <label>Dispositivo<input id="config-device-id" type="text" value="raspberry-pi-1" pattern="[A-Za-z0-9_-]{1,64}" required /></label>
+          <label>Distancia libre (cm)<input id="free-distance" type="number" min="5" max="200" step="0.1" /></label>
+          <label>Intervalo ultrasónico (s)<input id="sample-interval" type="number" min="0.1" max="3600" step="0.1" /></label>
+          <button id="save-config" type="submit">Aplicar configuración</button>
+        </form>
+        <div id="config-status" class="config-status" role="status"></div>
+      </section>
       <section><h2>Distancia promedio por minuto</h2><canvas id="chart" aria-label="Gráfico de distancia promedio reciente" role="img"></canvas></section>
       <section><h2>Mediciones</h2><div class="table-wrap"><table><thead><tr><th>Periodo</th><th>Sensor</th><th>Estado</th><th>Promedio</th><th>Muestras</th></tr></thead><tbody id="rows"></tbody></table></div><button id="load-more" class="load-more" type="button" hidden>Cargar más resultados</button></section>
     </main>
@@ -57,6 +73,9 @@
       const message = document.querySelector("#message");
       const refreshButton = document.querySelector("#refresh");
       const loadMoreButton = document.querySelector("#load-more");
+      const configForm = document.querySelector("#device-config");
+      const configStatus = document.querySelector("#config-status");
+      const saveConfigButton = document.querySelector("#save-config");
       let loadedRecords = [];
       let nextCursor = null;
       const formatDate = (value) => value ? new Intl.DateTimeFormat("es-CL", { dateStyle: "short", timeStyle: "short" }).format(new Date(value)) : "—";
@@ -117,6 +136,36 @@
         }
       }
       function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]); }
+      configForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        saveConfigButton.disabled = true;
+        configStatus.textContent = "Enviando configuración…";
+        const tokenInput = document.querySelector("#admin-token");
+        try {
+          const body = { deviceId: document.querySelector("#config-device-id").value };
+          const distance = document.querySelector("#free-distance").value;
+          const interval = document.querySelector("#sample-interval").value;
+          if (distance !== "") body.distanciaLibreCm = Number(distance);
+          if (interval !== "") body.sampleIntervalSeconds = Number(interval);
+          if (Object.keys(body).length === 1) throw new Error("Indica al menos un parámetro para cambiar.");
+          const response = await fetch("/api/configuracion", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${tokenInput.value}`,
+            },
+            body: JSON.stringify(body),
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || `La API respondió ${response.status}`);
+          configStatus.textContent = "Configuración guardada. El dispositivo la aplicará en el próximo ciclo de sincronización.";
+          tokenInput.value = "";
+        } catch (error) {
+          configStatus.textContent = `No fue posible aplicar la configuración: ${error.message}`;
+        } finally {
+          saveConfigButton.disabled = false;
+        }
+      });
       refreshButton.addEventListener("click", load);
       document.querySelector("#filters").addEventListener("submit", (event) => { event.preventDefault(); load(); });
       loadMoreButton.addEventListener("click", () => load(true));

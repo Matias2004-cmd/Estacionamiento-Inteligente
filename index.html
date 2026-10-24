@@ -56,6 +56,7 @@
       .device-row select, .member-row select { min-height:2.2rem; border:1px solid #cbd7ce; border-radius:8px; padding:.3rem; font:inherit; }
       #device-token-output { overflow-wrap:anywhere; }
       #private-chart { display:block; width:100%; height:250px; }
+      #private-app.sin-ingresos .card-ingresos, #private-app.sin-ingresos th:nth-child(6), #private-app.sin-ingresos td:nth-child(6) { display:none; }
       @media(max-width:650px) { .cards { grid-template-columns:1fr; } .topline { align-items:flex-start; flex-direction:column; } }
     </style>
   </head>
@@ -104,7 +105,7 @@
             <div class="card"><span class="label">Última distancia</span><strong class="value" id="private-distance">—</strong></div>
             <div class="card"><span class="label">Dispositivos activos</span><strong class="value" id="private-device-count">—</strong></div>
             <div class="card"><span class="label">Ocupación (últimos 60 min)</span><strong class="value" id="private-occupancy">—</strong></div>
-            <div class="card"><span class="label">Ingresos confirmados (60 min)</span><strong class="value" id="private-entries">—</strong></div>
+            <div class="card card-ingresos"><span class="label">Ingresos confirmados (60 min)</span><strong class="value" id="private-entries">—</strong></div>
           </div>
           <section><h2>Distancia de la organización en tiempo real</h2><canvas id="private-chart" aria-label="Gráfico privado de distancia" role="img"></canvas></section>
           <section><h2>Últimas mediciones en vivo</h2><div class="table-wrap"><table><thead><tr><th>Periodo</th><th>Dispositivo</th><th>Estado</th><th>Promedio</th><th>Muestras</th><th>Ingresos</th></tr></thead><tbody id="private-live-rows"></tbody></table></div></section>
@@ -446,6 +447,9 @@
         document.querySelector("#private-occupancy").textContent = lastHour.length
           ? `${Math.round(100 * lastHour.filter((record) => record.estado === "OCUPADO").length / lastHour.length)} %`
           : "Sin datos";
+        // Los ingresos confirmados solo existen si el procesamiento del dispositivo los calcula.
+        privateApp.classList.toggle("sin-ingresos",
+          !measurements.concat(privateRecords).some((record) => Number.isInteger(record.ingresosConfirmados)));
         document.querySelector("#private-entries").textContent = lastHour.length
           ? String(lastHour.reduce((total, record) => total + (Number.isInteger(record.ingresosConfirmados) ? record.ingresosConfirmados : 0), 0))
           : "—";

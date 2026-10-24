@@ -1,11 +1,12 @@
 # Estacionamiento inteligente — Solemne 1, Infraestructura TI
 
 Sistema IoT que detecta si un puesto de estacionamiento está **libre u ocupado** y
-cuenta los **ingresos de vehículos**, combinando un sensor ultrasónico HC-SR04 y un
-sensor infrarrojo de obstáculos conectados a una Raspberry Pi. Los datos se
-procesan en microservicios Docker, se envían por HTTPS a una API en Vercel y se
-guardan en Cloud Firestore. La plataforma web muestra datos en tiempo real,
-históricos, alertas y permite administrar organizaciones, usuarios y dispositivos.
+registra la **presencia** en el lugar, combinando un sensor ultrasónico HC-SR04 y un
+sensor PIR HC-SR501 conectados a una Raspberry Pi 3. Los datos se procesan en
+microservicios (tres contenedores Docker y dos servicios de adquisición), se envían
+por HTTPS a una API en Vercel y se guardan en Cloud Firestore. La plataforma web
+muestra datos en tiempo real, históricos, alertas y permite administrar
+organizaciones, usuarios y dispositivos.
 
 - **Plataforma pública:** https://solemne-1-ti.vercel.app
 - **Repositorio:** https://github.com/Matias2004-cmd/Estacionamiento-Inteligente
@@ -13,21 +14,25 @@ históricos, alertas y permite administrar organizaciones, usuarios y dispositiv
 | Documento | Contenido |
 | --- | --- |
 | [raspberry/README.md](raspberry/README.md) | Conexión del hardware, instalación y operación de los microservicios en la Pi |
-| [docs/evaluacion-uso.md](docs/evaluacion-uso.md) | Evaluación de uso y capacidad (requisito 5): estimación, medición, límites, optimizaciones, proyección y migración |
 | [docs/bitacora-recoleccion.md](docs/bitacora-recoleccion.md) | Bitácora del periodo de recolección y evidencias observadas |
 
 ## Arquitectura
 
 ```mermaid
 flowchart LR
-  subgraph PI["Raspberry Pi · Docker Compose"]
-    US["HC-SR04<br/>GPIO17/27"] --> AU["adquisicion-ultrasonico"]
-    IR["Sensor IR<br/>GPIO18"] --> AI["adquisicion-ir"]
-    AU -- "sensores/ultrasonico" --> MQ(("mqtt<br/>Mosquitto"))
+  subgraph PI["Raspberry Pi 3"]
+    US["HC-SR04<br/>GPIO17/27"] --> AU["adquisicion-ultrasonica<br/>(systemd)"]
+    IR["PIR HC-SR501<br/>GPIO18"] --> AI["adquisicion-ir<br/>(systemd)"]
+    subgraph DC["Docker Compose"]
+      MQ(("mqtt<br/>Mosquitto"))
+      PR["procesamiento<br/>estado + agregado/minuto"]
+      SY["sincronizacion<br/>cola SQLite + lotes"]
+    end
+    AU -- "sensores/ultrasonico" --> MQ
     AI -- "sensores/ir" --> MQ
-    MQ --> PR["procesamiento<br/>estado + agregado/minuto<br/>ingresos confirmados"]
+    MQ --> PR
     PR -- "procesados/mediciones" --> MQ
-    MQ --> SY["sincronizacion<br/>cola SQLite + lotes"]
+    MQ --> SY
     SY -- "config (retenido)" --> MQ
   end
   SY -- "HTTPS saliente<br/>token del dispositivo" --> API["API REST<br/>Vercel Functions"]
@@ -44,28 +49,26 @@ flowchart LR
 
 ### Microservicios en la Raspberry Pi
 
-| Contenedor | Responsabilidad única | Comunicación |
-| --- | --- | --- |
-| `mqtt` | Broker que desacopla productores y consumidores | Puerto 1883 solo en `127.0.0.1` |
-| `adquisicion-ultrasonico` | Lee el HC-SR04 con el intervalo configurado | Publica `sensores/ultrasonico`; escucha la configuración |
-| `adquisicion-ir` | Detecta el paso de vehículos por la entrada | Publica `sensores/ir` |
-| `procesamiento` | Valida, aplica histéresis LIBRE/OCUPADO, combina sensores y agrega por minuto | Consume `sensores/*`, publica `procesados/mediciones` |
-| `sincronizacion` | Cola local SQLite, envío por lotes HTTPS y consulta de configuración remota | Consume `procesados/mediciones`, publica la configuración retenida |
+| Servicio | Ejecución | Responsabilidad única | Comunicación |
+| --- | --- | --- | --- |
+| `mqtt` | Contenedor | Broker que desacopla productores y consumidores | Puerto 1883 solo en `127.0.0.1` |
+| `procesamiento` | Contenedor | Valida, aplica histéresis LIBRE/OCUPADO, combina sensores y agrega por minuto | Consume `sensores/*`, publica `procesados/mediciones` |
+| `sincronizacion` | Contenedor | Cola local SQLite, envío por lotes HTTPS y consulta de configuración remota | Consume `procesados/mediciones`, publica la configuración retenida |
+| `adquisicion-ultrasonica` | systemd | Lee el HC-SR04 con el intervalo configurado | Publica `sensores/ultrasonico`; escucha la configuración |
+| `adquisicion-ir` | systemd | Lee el PIR HC-SR501 y publica cada detección | Publica `sensores/ir` |
 
-Ningún servicio lee los datos de otro: todo pasa por tópicos MQTT. Cada
-contenedor tiene `restart: unless-stopped` y un healthcheck basado en un
-"latido" que el propio bucle principal actualiza, por lo que un servicio colgado
-aparece `unhealthy`.
+Ningún servicio lee los datos de otro: todo pasa por tópicos MQTT. Los
+contenedores usan `restart: unless-stopped` y healthcheck; los servicios de
+adquisición usan `Restart=on-failure` y están habilitados al arranque.
 
 ### Información combinada de los sensores
 
 - **Estado del puesto** (ultrasónico): distancia promedio con histéresis y tres
   lecturas consecutivas para evitar oscilaciones.
-- **Ingreso confirmado** (IR + ultrasónico): un evento IR seguido de que el
-  puesto pase a `OCUPADO` dentro de `VENTANA_INGRESO_SEGUNDOS` (60 s). Los
-  eventos IR que no terminan en ocupación se descartan como tránsito o ruido.
-- **Ocupación %** de la última hora e **ingresos confirmados** se muestran en
-  el panel de la organización.
+- **Detecciones del PIR** por minuto (`deteccionesIr`), guardadas en el mismo
+  documento que el estado y la distancia.
+- **Ocupación %** y **detecciones del PIR** de la última hora se muestran en el
+  panel de la organización.
 
 ## Estructura del repositorio
 
@@ -75,9 +78,9 @@ lib/api-auth.js          Firebase Admin, autenticación de usuarios/dispositivos
 index.html               Plataforma web (pública + privada)
 firestore.rules          Security Rules por organización y rol
 firestore.indexes.json   Índices y exenciones de índice
-raspberry/               Microservicios, Dockerfile y docker-compose.yml
+raspberry/               Microservicios, Dockerfile, docker-compose.yml y unidades systemd
 scripts/                 Verificación, exportación, medición de uso y proyección de costos
-docs/                    Evaluación de uso y bitácora
+docs/                    Bitácora de recolección
 ```
 
 ## Modelo de datos (Cloud Firestore)
@@ -91,7 +94,7 @@ organizaciones/{organizacionId}
   │     ultimoContacto, ultimaMedicion{...}
   └─ mediciones/{dispositivoId}__{dispositivoId}_{epochMinuto}
         sensorId, periodoInicio, estado, distanciaCm, distanciaMinCm,
-        distanciaMaxCm, muestras, deteccionesIr, ingresosConfirmados, timestamp
+        distanciaMaxCm, muestras, deteccionesIr, timestamp
 credencialesDispositivo/{sha256(token)}   organizacionId, dispositivoId, revoked
 mediciones/{id}                           copia pública opcional para la demo
 ```
@@ -140,7 +143,7 @@ curl -X POST https://solemne-1-ti.vercel.app/api/mediciones \
   -H "Authorization: Bearer $TOKEN_DISPOSITIVO" -H "Content-Type: application/json" \
   -d '{"records":[{"recordId":"raspberry-pi-1_1792782000","sensorId":"raspberry-pi-1",
        "periodoInicio":"2026-10-23T19:00:00Z","distanciaCm":12.4,"distanciaMinCm":11.9,
-       "distanciaMaxCm":13.0,"muestras":12,"deteccionesIr":1,"ingresosConfirmados":1,
+       "distanciaMaxCm":13.0,"muestras":12,"deteccionesIr":1,
        "estado":"OCUPADO"}]}'
 # 201 {"ids":["raspberry-pi-1__raspberry-pi-1_1792782000"],"saved":true,"count":1,"scope":"organizacion"}
 
@@ -244,12 +247,14 @@ npx vercel dev         # API + web en http://localhost:3000 (usa variables de .e
    HC-SR04 y ver el cambio LIBRE → OCUPADO (y el aviso emergente) en ≤ 6 min
    (1 min de agregación + lote de 5).
 2. **Cambio de configuración:** editar *Intervalo* o *Distancia libre* en el
-   panel y mostrar en `docker compose logs -f adquisicion-ultrasonico procesamiento`
-   el mensaje `Remote ... updated` (≤ 60 s), sin reiniciar nada.
+   panel y mostrar en `docker compose logs -f procesamiento` o en
+   `journalctl -u estacionamiento-adquisicion-ultrasonico -f` el mensaje
+   `Remote ... updated` (≤ 30 s), sin reiniciar nada.
 3. **Recuperación tras desconexión:** apagar el hotspot 3–5 min, mostrar la cola
    (`registros pendientes > 0`), reconectar y ver `Uploaded batch`; los
    documentos aparecen sin duplicados (ID por minuto).
-4. **Estado de los microservicios:** `docker compose ps` con los 5 contenedores `healthy`.
+4. **Estado de los microservicios:** `docker compose ps` con los 3 contenedores `healthy` y
+   `systemctl is-active` de los dos servicios de adquisición.
 5. **Aislamiento:** iniciar sesión con un usuario de otra organización y mostrar
    que no ve los dispositivos ni las mediciones; intentar leer por consola de
    Firestore desde el navegador devuelve `permission-denied`.

@@ -4,7 +4,6 @@ import os
 import signal
 import threading
 import time
-from collections import deque
 from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
@@ -21,22 +20,6 @@ candidate = "LIBRE"
 candidate_count = 0
 last_sample_ids = set()
 free_reference = 23.0
-# Eventos IR recientes que todavía pueden confirmar un ingreso.
-pending_ir_events = deque()
-entry_window_seconds = 60.0
-
-HEARTBEAT_FILE = os.environ.get("HEARTBEAT_FILE", "/tmp/latido")
-last_heartbeat = 0.0
-
-
-def heartbeat():
-    """Actualiza el archivo que revisa el healthcheck (como máximo cada 10 s)."""
-    global last_heartbeat
-    now = time.monotonic()
-    if now - last_heartbeat >= 10:
-        with open(HEARTBEAT_FILE, "w", encoding="utf-8") as heartbeat_file:
-            heartbeat_file.write(str(time.time()))
-        last_heartbeat = now
 
 
 def stop_service(_signum, _frame):
@@ -53,13 +36,11 @@ def new_bucket(start):
         "start": start,
         "distances": [],
         "ir_events": 0,
-        "confirmed_entries": 0,
         "estado": state,
     }
 
 
 def update_state(distance, free_reference):
-    """Actualiza el estado con histéresis; devuelve True si el puesto pasó a OCUPADO."""
     global state, candidate, candidate_count
     occupied_threshold = free_reference - 5
     free_threshold = free_reference - 3
@@ -79,20 +60,6 @@ def update_state(distance, free_reference):
     if candidate != state and candidate_count >= 3:
         state = candidate
         logging.info("Parking state changed to %s", state)
-        return state == "OCUPADO"
-    return False
-
-
-def confirm_entry(timestamp):
-    """Combina ambos sensores: un paso por el IR seguido de que el ultrasónico
-    detecte el puesto OCUPADO dentro de la ventana cuenta como ingreso confirmado.
-    Los eventos IR que no terminan en ocupación se consideran tránsito o ruido."""
-    while pending_ir_events and timestamp - pending_ir_events[0] > entry_window_seconds:
-        pending_ir_events.popleft()
-    if pending_ir_events and pending_ir_events[0] <= timestamp:
-        pending_ir_events.popleft()
-        return True
-    return False
 
 
 def flush_bucket(client, current, device_id):
@@ -118,7 +85,6 @@ def flush_bucket(client, current, device_id):
         "distanciaMaxCm": round(max(distances), 2),
         "muestras": len(distances),
         "deteccionesIr": current["ir_events"],
-        "ingresosConfirmados": current["confirmed_entries"],
         "estado": current["estado"],
     }
     result = client.publish(
@@ -130,17 +96,16 @@ def flush_bucket(client, current, device_id):
         logging.error("Could not publish minute aggregate: MQTT code %s", result.rc)
         return
     logging.info(
-        "Minute aggregate published: samples=%s, average=%.2f cm, state=%s, IR events=%s, confirmed entries=%s",
+        "Minute aggregate published: samples=%s, average=%.2f cm, state=%s, IR events=%s",
         len(distances),
         average,
         current["estado"],
         current["ir_events"],
-        current["confirmed_entries"],
     )
 
 
 def main():
-    global stopping, free_reference, entry_window_seconds
+    global stopping, free_reference
     signal.signal(signal.SIGTERM, stop_service)
     signal.signal(signal.SIGINT, stop_service)
 
@@ -148,9 +113,6 @@ def main():
     free_reference = float(os.environ.get("DISTANCIA_LIBRE_CM", "23"))
     if not 5 <= free_reference <= 200:
         raise ValueError("DISTANCIA_LIBRE_CM must be between 5 and 200")
-    entry_window_seconds = float(os.environ.get("VENTANA_INGRESO_SEGUNDOS", "60"))
-    if not 5 <= entry_window_seconds <= 600:
-        raise ValueError("VENTANA_INGRESO_SEGUNDOS must be between 5 and 600")
 
     sample_topic = os.environ.get("MQTT_SAMPLE_TOPIC", "sensores/ultrasonico")
     ir_topic = os.environ.get("MQTT_IR_TOPIC", "sensores/ir")
@@ -218,13 +180,7 @@ def main():
                         logging.warning("Invalid ultrasonic reading ignored")
                         return
                     current["distances"].append(float(distance))
-                    became_occupied = update_state(
-                        float(distance),
-                        settings["distanciaLibreCm"],
-                    )
-                    if became_occupied and confirm_entry(timestamp):
-                        current["confirmed_entries"] += 1
-                        logging.info("Vehicle entry confirmed by IR + ultrasonic")
+                    update_state(float(distance), settings["distanciaLibreCm"])
                     current["estado"] = state
                     logging.info(
                         "Live reading: %.2f cm | State: %s",
@@ -233,9 +189,6 @@ def main():
                     )
                 elif payload.get("tipo") == "entrada":
                     current["ir_events"] += 1
-                    pending_ir_events.append(timestamp)
-                    if len(pending_ir_events) > 1000:
-                        pending_ir_events.popleft()
                 else:
                     logging.warning("Unknown MQTT message type ignored")
                     return
@@ -261,7 +214,6 @@ def main():
                 expired = sorted(start for start in buckets if start < now_minute)
                 for start in expired:
                     flush_bucket(client, buckets.pop(start), device_id)
-            heartbeat()
             time.sleep(1)
     finally:
         with lock:

@@ -1,0 +1,21 @@
+[Unit]
+Description=Estacionamiento IR sensor acquisition
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=matiascatalan
+SupplementaryGroups=gpio
+WorkingDirectory=/home/matiascatalan/estacionamiento
+EnvironmentFile=/home/matiascatalan/estacionamiento/.env
+Environment=GPIOZERO_PIN_FACTORY=lgpio
+Environment=MQTT_HOST=127.0.0.1
+Environment=IR_GPIO=18
+ExecStart=/usr/bin/python3 /home/matiascatalan/estacionamiento/servicios/adquisicion/ir.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

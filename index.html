@@ -15,7 +15,7 @@
       .topline { display:flex; align-items:center; justify-content:space-between; gap:1rem; margin-bottom:1rem; }
       button { border:0; border-radius:8px; padding:.7rem 1rem; color:white; background:#176b4b; font:inherit; cursor:pointer; }
       button:disabled { opacity:.6; cursor:wait; }
-      .cards { display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; }
+      .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:1rem; }
       .filters { display:flex; flex-wrap:wrap; align-items:end; gap:1rem; }
       .filters label { display:grid; gap:.4rem; color:#607067; font-size:.88rem; }
       .filters input { min-height:2.6rem; border:1px solid #cbd7ce; border-radius:8px; padding:.45rem .6rem; font:inherit; color:#17221d; }
@@ -47,6 +47,8 @@
       .admin-form button, .small-button { min-height:2.4rem; padding:.45rem .75rem; }
       .alert { padding:.7rem .9rem; margin:.5rem 0; border-radius:8px; background:#fff4dc; color:#704d00; }
       .alert.error { background:#fce9e4; color:#9f3a24; }
+      #state-toast { position:fixed; right:1.25rem; bottom:1.25rem; z-index:1000; max-width:min(26rem,calc(100vw - 2.5rem)); padding:1rem 1.2rem; border-radius:10px; color:#fff; background:#9f3a24; box-shadow:0 8px 28px #17221d40; font-weight:700; }
+      #state-toast[hidden] { display:none; }
       .admin-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:1rem; }
       .admin-grid section { margin:0; }
       .admin-message { min-height:1.4rem; color:#607067; overflow-wrap:anywhere; }
@@ -101,9 +103,11 @@
             <div class="card"><span class="label">Último estado</span><strong class="value" id="private-state">—</strong></div>
             <div class="card"><span class="label">Última distancia</span><strong class="value" id="private-distance">—</strong></div>
             <div class="card"><span class="label">Dispositivos activos</span><strong class="value" id="private-device-count">—</strong></div>
+            <div class="card"><span class="label">Ocupación (últimos 60 min)</span><strong class="value" id="private-occupancy">—</strong></div>
+            <div class="card"><span class="label">Ingresos confirmados (60 min)</span><strong class="value" id="private-entries">—</strong></div>
           </div>
           <section><h2>Distancia de la organización en tiempo real</h2><canvas id="private-chart" aria-label="Gráfico privado de distancia" role="img"></canvas></section>
-          <section><h2>Últimas mediciones en vivo</h2><div class="table-wrap"><table><thead><tr><th>Periodo</th><th>Dispositivo</th><th>Estado</th><th>Promedio</th><th>Muestras</th></tr></thead><tbody id="private-live-rows"></tbody></table></div></section>
+          <section><h2>Últimas mediciones en vivo</h2><div class="table-wrap"><table><thead><tr><th>Periodo</th><th>Dispositivo</th><th>Estado</th><th>Promedio</th><th>Muestras</th><th>Ingresos</th></tr></thead><tbody id="private-live-rows"></tbody></table></div></section>
         </section>
         <section>
           <h2>Histórico privado de la organización</h2>
@@ -112,7 +116,7 @@
             <label>Hasta<input id="private-to" type="datetime-local" /></label>
             <button type="submit">Consultar histórico</button>
           </form>
-          <div class="table-wrap"><table><thead><tr><th>Periodo</th><th>Dispositivo</th><th>Estado</th><th>Promedio</th><th>Muestras</th></tr></thead><tbody id="private-history-rows"></tbody></table></div>
+          <div class="table-wrap"><table><thead><tr><th>Periodo</th><th>Dispositivo</th><th>Estado</th><th>Promedio</th><th>Muestras</th><th>Ingresos</th></tr></thead><tbody id="private-history-rows"></tbody></table></div>
           <button id="private-load-more" class="load-more" type="button" hidden>Cargar más resultados</button>
         </section>
         <div id="admin-tools" hidden>
@@ -131,7 +135,7 @@
               <div id="device-list"></div>
               <form id="device-form" class="admin-form">
                 <input id="device-id" type="hidden" />
-                <label>ID del dispositivo<input id="device-identifier" maxlength="64" pattern="[A-Za-z0-9_-]+" value="raspberry-pi-1" required /></label>
+                <label>ID del dispositivo<input id="device-identifier" maxlength="64" pattern="[A-Za-z0-9_\x2D]+" value="raspberry-pi-1" required /></label>
                 <label>Nombre<input id="device-name" maxlength="100" required /></label>
                 <label><span>Publicar también en el panel público (demo)</span><input id="device-public-demo" type="checkbox" /></label>
                 <p>Al marcar esta opción, una copia de las mediciones de este dispositivo será pública. Déjala desmarcada para mantenerlas solo en la organización. Las copias ya publicadas no se eliminan al desmarcarla.</p>
@@ -160,6 +164,7 @@
         </div>
       </div>
     </main>
+    <div id="state-toast" role="status" aria-live="assertive" hidden></div>
     <script>
       const message = document.querySelector("#message");
       const refreshButton = document.querySelector("#refresh");
@@ -261,6 +266,8 @@
       let memberships = [];
       let measurements = [];
       let devices = [];
+      let previousPrivateState = null;
+      let stateToastTimer = null;
       let privateRecords = [];
       let privateCursor = null;
       let measurementUnsubscribe = null;
@@ -317,6 +324,8 @@
         document.querySelector("#private-state").textContent = "—";
         document.querySelector("#private-distance").textContent = "—";
         document.querySelector("#private-device-count").textContent = "—";
+        document.querySelector("#private-occupancy").textContent = "—";
+        document.querySelector("#private-entries").textContent = "—";
         const tokenOutput = document.querySelector("#device-token-output");
         tokenOutput.textContent = "";
         tokenOutput.hidden = true;
@@ -335,6 +344,7 @@
             record.estado || "—",
             Number.isFinite(Number(record.distanciaCm)) ? `${Number(record.distanciaCm).toFixed(2)} cm` : "—",
             Number.isInteger(record.muestras) ? String(record.muestras) : "—",
+            Number.isInteger(record.ingresosConfirmados) ? String(record.ingresosConfirmados) : "—",
           ];
           for (const value of values) {
             const cell = document.createElement("td");
@@ -429,9 +439,35 @@
           : "—";
         document.querySelector("#private-device-count").textContent =
           `${devices.filter((device) => device.activo).length} / ${devices.length}`;
+        // Información combinada: % de minutos ocupados (ultrasónico) e ingresos
+        // confirmados por IR + ultrasónico en la última hora.
+        const lastHour = measurements.filter((record) =>
+          Date.now() - Date.parse(record.periodoInicio) <= 60 * 60 * 1000);
+        document.querySelector("#private-occupancy").textContent = lastHour.length
+          ? `${Math.round(100 * lastHour.filter((record) => record.estado === "OCUPADO").length / lastHour.length)} %`
+          : "Sin datos";
+        document.querySelector("#private-entries").textContent = lastHour.length
+          ? String(lastHour.reduce((total, record) => total + (Number.isInteger(record.ingresosConfirmados) ? record.ingresosConfirmados : 0), 0))
+          : "—";
         renderPrivateTable(measurements);
         renderAlerts();
         drawPrivateChart();
+      }
+
+      function notifyPrivateStateChange(value) {
+        const nextState = typeof value === "string" ? value.toUpperCase() : "";
+        const validStates = ["LIBRE", "OCUPADO"];
+        if (validStates.includes(previousPrivateState) &&
+            validStates.includes(nextState) && previousPrivateState !== nextState) {
+          const toast = document.querySelector("#state-toast");
+          toast.textContent = `El estacionamiento cambió de ${previousPrivateState} a ${nextState}.`;
+          toast.hidden = false;
+          window.clearTimeout(stateToastTimer);
+          stateToastTimer = window.setTimeout(() => {
+            toast.hidden = true;
+          }, 6000);
+        }
+        if (validStates.includes(nextState)) previousPrivateState = nextState;
       }
 
       function toIsoDate(value) {
@@ -483,6 +519,31 @@
           });
           row.append(summary, edit);
           if (device.activo) {
+            const renew = document.createElement("button");
+            renew.className = "small-button";
+            renew.type = "button";
+            renew.textContent = "Renovar credencial";
+            renew.addEventListener("click", async () => {
+              if (!window.confirm(`¿Renovar la credencial de ${device.nombre}? La credencial anterior dejará de funcionar.`)) return;
+              try {
+                const result = await apiRequest("/api/dispositivos", {
+                  method: "PATCH",
+                  body: JSON.stringify({
+                    organizacion: currentOrganization.id,
+                    dispositivoId: device.id,
+                    renovarCredencial: true,
+                  }),
+                });
+                const tokenOutput = document.querySelector("#device-token-output");
+                tokenOutput.hidden = false;
+                tokenOutput.textContent = `Credencial nueva (se muestra una sola vez): ${result.token}`;
+                document.querySelector("#device-message").textContent = "Credencial renovada. Actualiza el secreto en la Raspberry; la credencial anterior ya fue revocada.";
+              } catch (error) {
+                document.querySelector("#device-message").textContent = error.message;
+              }
+            });
+            row.append(renew);
+
             const disable = document.createElement("button");
             disable.className = "small-button";
             disable.type = "button";
@@ -570,6 +631,9 @@
         privateApp.hidden = false;
         adminTools.hidden = currentOrganization.role !== "admin";
         measurements = [];
+        previousPrivateState = null;
+        window.clearTimeout(stateToastTimer);
+        document.querySelector("#state-toast").hidden = true;
         devices = [];
         privateRecords = [];
         privateCursor = null;
@@ -586,6 +650,7 @@
               ...document.data(),
               periodoInicio: toIsoDate(document.data().periodoInicio),
             }));
+            notifyPrivateStateChange(measurements[0]?.estado);
             renderPrivateDashboard();
           },
           (error) => setAccountMessage(`No se pudieron recibir mediciones privadas: ${error.message}`, true),
@@ -640,7 +705,7 @@
           for (const organization of memberships) {
             const option = document.createElement("option");
             option.value = organization.id;
-            option.textContent = `${organization.nombre} (${organization.role === "admin" ? "administrador" : "operador"})`;
+            option.textContent = `${organization.nombre} (${organization.role === "admin" ? "administrador" : "operador"}) · ${organization.id.slice(0, 8)}`;
             organizationSelect.append(option);
           }
           await loadOrganization(memberships[0].id);

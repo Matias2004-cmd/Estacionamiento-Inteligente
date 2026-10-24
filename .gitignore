@@ -2,16 +2,28 @@ node_modules/
 .venv/
 .venv-*/
 .vercel/
+.vercel
 .pytest_cache/
 __pycache__/
 *.py[cod]
+
+# Secretos: nunca subir credenciales al repositorio
 .env
 .env.*
 !.env.example
+serviceAccount*.json
+**/serviceAccount*.json
 *-firebase-adminsdk-*.json
 **/*-firebase-adminsdk-*.json
 *service-account*.json
 **/*service-account*.json
 *service_account*.json
 **/*service_account*.json
-.vercel
+raspberry/secrets/
+
+# Exportaciones locales de Firestore (pueden contener datos privados)
+exportaciones/
+firestore-backup*.json
+
+# Informe (se entrega por Canvas, no va en el repositorio)
+Informe_*.docx

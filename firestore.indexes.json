@@ -1,0 +1,67 @@
+{
+  "indexes": [],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "miembros",
+      "fieldPath": "uid",
+      "indexes": [
+        {
+          "order": "ASCENDING",
+          "queryScope": "COLLECTION"
+        },
+        {
+          "order": "DESCENDING",
+          "queryScope": "COLLECTION"
+        },
+        {
+          "arrayConfig": "CONTAINS",
+          "queryScope": "COLLECTION"
+        },
+        {
+          "order": "ASCENDING",
+          "queryScope": "COLLECTION_GROUP"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "mediciones",
+      "fieldPath": "distanciaCm",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "mediciones",
+      "fieldPath": "distanciaMinCm",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "mediciones",
+      "fieldPath": "distanciaMaxCm",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "mediciones",
+      "fieldPath": "muestras",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "mediciones",
+      "fieldPath": "deteccionesIr",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "mediciones",
+      "fieldPath": "ingresosConfirmados",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "mediciones",
+      "fieldPath": "timestamp",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "mediciones",
+      "fieldPath": "estado",
+      "indexes": []
+    }
+  ]
+}

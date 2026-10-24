@@ -18,6 +18,19 @@ stopping = False
 lock = threading.Lock()
 config_stop_event = threading.Event()
 
+HEARTBEAT_FILE = os.environ.get("HEARTBEAT_FILE", "/tmp/latido")
+last_heartbeat = 0.0
+
+
+def heartbeat():
+    """Actualiza el archivo que revisa el healthcheck (como máximo cada 10 s)."""
+    global last_heartbeat
+    now = time.monotonic()
+    if now - last_heartbeat >= 10:
+        with open(HEARTBEAT_FILE, "w", encoding="utf-8") as heartbeat_file:
+            heartbeat_file.write(str(time.time()))
+        last_heartbeat = now
+
 
 def stop_service(_signum, _frame):
     global stopping
@@ -33,12 +46,28 @@ def read_secret(path):
     return value
 
 
+def read_optional_secret(path):
+    """El bypass de Vercel solo es necesario con Deployment Protection activa."""
+    try:
+        with open(path, encoding="utf-8") as secret_file:
+            return secret_file.read().strip() or None
+    except (FileNotFoundError, TypeError):
+        return None
+
+
+def auth_headers(token, bypass):
+    headers = {"Authorization": f"Bearer {token}"}
+    if bypass:
+        headers["x-vercel-protection-bypass"] = bypass
+    return headers
+
+
 def main():
     signal.signal(signal.SIGTERM, stop_service)
     signal.signal(signal.SIGINT, stop_service)
 
     token = read_secret(os.environ["API_TOKEN_FILE"])
-    bypass = read_secret(os.environ["VERCEL_BYPASS_FILE"])
+    bypass = read_optional_secret(os.environ.get("VERCEL_BYPASS_FILE"))
     api_url = os.environ["API_URL"]
     config_url = os.environ.get(
         "DEVICE_CONFIG_URL",
@@ -46,7 +75,7 @@ def main():
     )
     device_id = os.environ.get("DEVICE_ID", "raspberry-pi-1")
     config_topic = f"estacionamiento/config/dispositivos/{device_id}"
-    config_poll_seconds = int(os.environ.get("DEVICE_CONFIG_POLL_SECONDS", "30"))
+    config_poll_seconds = int(os.environ.get("DEVICE_CONFIG_POLL_SECONDS", "60"))
     if not 1 <= config_poll_seconds <= 3600:
         raise ValueError("DEVICE_CONFIG_POLL_SECONDS must be between 1 and 3600")
     batch_size = int(os.environ.get("BATCH_SIZE", "5"))
@@ -157,6 +186,7 @@ def main():
                 or stopping
             ):
                 send_batch(database, rows, api_url, token, bypass)
+            heartbeat()
             time.sleep(2)
     finally:
         config_stop_event.set()
@@ -211,11 +241,7 @@ def poll_remote_config(
 def fetch_device_config(config_url, device_id, token, bypass):
     request = Request(
         config_url,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "x-vercel-protection-bypass": bypass,
-            "Accept": "application/json",
-        },
+        headers={**auth_headers(token, bypass), "Accept": "application/json"},
     )
     with urlopen(request, timeout=10) as response:
         result = json.loads(response.read().decode("utf-8"))
@@ -243,11 +269,7 @@ def send_batch(database, rows, api_url, token, bypass):
     request = Request(
         api_url,
         data=body,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}",
-            "x-vercel-protection-bypass": bypass,
-        },
+        headers={**auth_headers(token, bypass), "Content-Type": "application/json"},
         method="POST",
     )
     try:

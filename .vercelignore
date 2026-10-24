@@ -2,6 +2,10 @@ node_modules/
 .env
 .env.*
 raspberry/
+scripts/
+docs/
+exportaciones/
+serviceAccount*.json
 *-firebase-adminsdk-*.json
 **/*-firebase-adminsdk-*.json
 *service-account*.json

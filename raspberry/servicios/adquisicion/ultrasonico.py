@@ -15,6 +15,21 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
 )
 stopping = False
+
+HEARTBEAT_FILE = os.environ.get("HEARTBEAT_FILE", "/tmp/latido")
+last_heartbeat = 0.0
+
+
+def heartbeat():
+    """Actualiza el archivo que revisa el healthcheck (como máximo cada 10 s)."""
+    global last_heartbeat
+    now = time.monotonic()
+    if now - last_heartbeat >= 10:
+        with open(HEARTBEAT_FILE, "w", encoding="utf-8") as heartbeat_file:
+            heartbeat_file.write(str(time.time()))
+        last_heartbeat = now
+
+
 interval_lock = threading.Lock()
 wake_event = threading.Event()
 sample_interval = 5.0
@@ -109,9 +124,17 @@ def main():
             except DistanceSensorNoEcho:
                 logging.warning("No echo received; invalid sample skipped")
 
+            heartbeat()
             with settings_lock:
                 interval = settings["intervaloMuestreoSegundos"]
-            config_changed.wait(interval)
+            # Espera en tramos cortos para mantener el latido con intervalos largos;
+            # un cambio de configuración interrumpe la espera de inmediato.
+            deadline = time.monotonic() + interval
+            while not stopping:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or config_changed.wait(min(remaining, 10)):
+                    break
+                heartbeat()
             config_changed.clear()
     finally:
         sensor.close()

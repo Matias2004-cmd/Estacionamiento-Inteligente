@@ -1,15 +1,24 @@
 rules_version = '2';
 
+// Toda escritura pasa por la API en Vercel (Firebase Admin). El navegador solo lee:
+//  - la colección pública de demostración `mediciones`;
+//  - los datos de su organización, si es miembro con rol admin u operator
+//    y su correo está verificado.
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() {
       return request.auth != null;
     }
 
+    function memberRole(organizationId) {
+      return get(/databases/$(database)/documents/organizaciones/$(organizationId)/miembros/$(request.auth.uid)).data.role;
+    }
+
     function isMember(organizationId) {
       return signedIn()
         && request.auth.token.email_verified == true
-        && exists(/databases/$(database)/documents/organizaciones/$(organizationId)/miembros/$(request.auth.uid));
+        && exists(/databases/$(database)/documents/organizaciones/$(organizationId)/miembros/$(request.auth.uid))
+        && memberRole(organizationId) in ['admin', 'operator'];
     }
 
     match /mediciones/{measurementId} {
@@ -27,6 +36,7 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // credencialesDispositivo, miembros y organizaciones solo se acceden desde la API.
     match /{document=**} {
       allow read, write: if false;
     }

@@ -1,222 +1,276 @@
-# Bitacora de recoleccion - Solemne 1
+# Estacionamiento inteligente — Solemne 1, Infraestructura TI
 
-**Fecha documentada:** 15 de octubre de 2026  
-**Proyecto:** estacionamiento inteligente con Raspberry Pi, MQTT y Firestore  
-**Proposito:** conservar una descripcion verificable del trabajo realizado hoy y servir de insumo para el informe o la presentacion. Esta bitacora no reemplaza el informe final ni demuestra por si sola siete dias completos de operacion.
+Sistema IoT que detecta si un puesto de estacionamiento está **libre u ocupado** y
+cuenta los **ingresos de vehículos**, combinando un sensor ultrasónico HC-SR04 y un
+sensor infrarrojo de obstáculos conectados a una Raspberry Pi. Los datos se
+procesan en microservicios Docker, se envían por HTTPS a una API en Vercel y se
+guardan en Cloud Firestore. La plataforma web muestra datos en tiempo real,
+históricos, alertas y permite administrar organizaciones, usuarios y dispositivos.
 
-## Periodo de recoleccion declarado
+- **Plataforma pública:** https://solemne-1-ti.vercel.app
+- **Repositorio:** https://github.com/Matias2004-cmd/Estacionamiento-Inteligente
 
-- **Inicio declarado:** 15 de octubre de 2026, 18:35 (UTC-3, hora de Chile continental).
-- **Fin de siete dias:** 22 de octubre de 2026, 18:35 (UTC-3), siempre que la adquisicion se mantenga durante todo el periodo.
-- **Alcance de los datos:** recoleccion ultrasónica. El IR sigue detenido y sus lecturas no se consideran validas.
-- **Verificacion:** este horario registra el inicio indicado por el usuario; no confirma por si mismo que los servicios permanecieran activos desde ese minuto. Si la adquisicion efectiva comenzo despues, anotar la hora real y calcular el fin siete dias despues. Registrar reinicios, cortes y pausas; no presentar un periodo con interrupciones como siete dias continuos.
+| Documento | Contenido |
+| --- | --- |
+| [raspberry/README.md](raspberry/README.md) | Conexión del hardware, instalación y operación de los microservicios en la Pi |
+| [docs/evaluacion-uso.md](docs/evaluacion-uso.md) | Evaluación de uso y capacidad (requisito 5): estimación, medición, límites, optimizaciones, proyección y migración |
+| [docs/bitacora-recoleccion.md](docs/bitacora-recoleccion.md) | Bitácora del periodo de recolección y evidencias observadas |
 
-## Resumen
+## Arquitectura
 
-Se puso en marcha una ruta de adquisicion y almacenamiento para medir la distancia de un puesto, clasificarlo como `LIBRE` u `OCUPADO`, resumir las lecturas por minuto y enviar los resumenes a Firestore mediante una API desplegada en Vercel. Se comprobo que Firestore contiene documentos reales de esta ruta.
+```mermaid
+flowchart LR
+  subgraph PI["Raspberry Pi · Docker Compose"]
+    US["HC-SR04<br/>GPIO17/27"] --> AU["adquisicion-ultrasonico"]
+    IR["Sensor IR<br/>GPIO18"] --> AI["adquisicion-ir"]
+    AU -- "sensores/ultrasonico" --> MQ(("mqtt<br/>Mosquitto"))
+    AI -- "sensores/ir" --> MQ
+    MQ --> PR["procesamiento<br/>estado + agregado/minuto<br/>ingresos confirmados"]
+    PR -- "procesados/mediciones" --> MQ
+    MQ --> SY["sincronizacion<br/>cola SQLite + lotes"]
+    SY -- "config (retenido)" --> MQ
+  end
+  SY -- "HTTPS saliente<br/>token del dispositivo" --> API["API REST<br/>Vercel Functions"]
+  API -- "Firebase Admin" --> FS[("Cloud Firestore")]
+  WEB["Plataforma web<br/>index.html"] -- "Firebase Auth + ID token" --> API
+  WEB -- "onSnapshot (Security Rules)" --> FS
+```
 
-La captura en vivo mostro lecturas de aproximadamente 25 cm con el espacio despejado (`LIBRE`) y lecturas menores al acercar un objeto (`OCUPADO`). Tambien se observaron agregados por minuto con 12 muestras. El IR produjo eventos repetidos aun cuando el usuario indico que nada se movia frente al sensor; por eso se detuvo y sus conteos no deben tratarse como mediciones validas. El periodo de recoleccion de siete dias se declara iniciado el 15 de octubre de 2026 a las 18:35 (UTC-3), solo para la adquisicion ultrasónica.
+| Capa | Dónde | Responsabilidad |
+| --- | --- | --- |
+| Presentación | [index.html](index.html) | Dashboard público y privado, históricos, alertas y administración |
+| Lógica de negocio | [api/](api/) | Validación de mediciones, roles, organizaciones, tokens de dispositivo |
+| Acceso a datos | [lib/api-auth.js](lib/api-auth.js) + Firebase Admin | Conexión a Firestore, autenticación de usuarios y dispositivos |
 
-Hubo al menos una interrupcion por apagado de la Raspberry y pausas para depurar antes del periodo de recoleccion declarado. Por tanto, **los siete dias continuos aun no quedan acreditados**: deben completarse desde el inicio declarado o desde la hora real de inicio si fue posterior, registrando cualquier interrupcion.
+### Microservicios en la Raspberry Pi
 
-## Arquitectura que se probo
+| Contenedor | Responsabilidad única | Comunicación |
+| --- | --- | --- |
+| `mqtt` | Broker que desacopla productores y consumidores | Puerto 1883 solo en `127.0.0.1` |
+| `adquisicion-ultrasonico` | Lee el HC-SR04 con el intervalo configurado | Publica `sensores/ultrasonico`; escucha la configuración |
+| `adquisicion-ir` | Detecta el paso de vehículos por la entrada | Publica `sensores/ir` |
+| `procesamiento` | Valida, aplica histéresis LIBRE/OCUPADO, combina sensores y agrega por minuto | Consume `sensores/*`, publica `procesados/mediciones` |
+| `sincronizacion` | Cola local SQLite, envío por lotes HTTPS y consulta de configuración remota | Consume `procesados/mediciones`, publica la configuración retenida |
+
+Ningún servicio lee los datos de otro: todo pasa por tópicos MQTT. Cada
+contenedor tiene `restart: unless-stopped` y un healthcheck basado en un
+"latido" que el propio bucle principal actualiza, por lo que un servicio colgado
+aparece `unhealthy`.
+
+### Información combinada de los sensores
+
+- **Estado del puesto** (ultrasónico): distancia promedio con histéresis y tres
+  lecturas consecutivas para evitar oscilaciones.
+- **Ingreso confirmado** (IR + ultrasónico): un evento IR seguido de que el
+  puesto pase a `OCUPADO` dentro de `VENTANA_INGRESO_SEGUNDOS` (60 s). Los
+  eventos IR que no terminan en ocupación se descartan como tránsito o ruido.
+- **Ocupación %** de la última hora e **ingresos confirmados** se muestran en
+  el panel de la organización.
+
+## Estructura del repositorio
 
 ```text
-HC-SR04 (GPIO17 TRIG, GPIO27 ECHO)
-    -> servicio de adquisicion en Raspberry Pi (systemd)
-    -> MQTT local (Mosquitto en Docker, puerto ligado a 127.0.0.1:1883)
-    -> procesamiento en Docker (estabilizacion y agregado por minuto)
-    -> sincronizacion en Docker (cola SQLite y lotes HTTPS)
-    -> API propia en Vercel
-    -> Cloud Firestore / coleccion mediciones
+api/                     Endpoints REST (Vercel Functions)
+lib/api-auth.js          Firebase Admin, autenticación de usuarios/dispositivos, errores
+index.html               Plataforma web (pública + privada)
+firestore.rules          Security Rules por organización y rol
+firestore.indexes.json   Índices y exenciones de índice
+raspberry/               Microservicios, Dockerfile y docker-compose.yml
+scripts/                 Verificación, exportación, medición de uso y proyección de costos
+docs/                    Evaluación de uso y bitácora
 ```
 
-El programa IR se configuro en GPIO18 (pin fisico 12), pero al publicar eventos sin movimiento se dejo detenido. No se deben usar esos eventos como conteos de entradas.
+## Modelo de datos (Cloud Firestore)
 
-### Parametros y procesamiento observados
+```text
+organizaciones/{organizacionId}
+  ├─ nombre, creadaEn
+  ├─ miembros/{uid}            uid, email, role: "admin" | "operator"
+  ├─ dispositivos/{dispositivoId}
+  │     nombre, tipo, activo, publicarEnDemo, configuracion{...},
+  │     ultimoContacto, ultimaMedicion{...}
+  └─ mediciones/{dispositivoId}__{dispositivoId}_{epochMinuto}
+        sensorId, periodoInicio, estado, distanciaCm, distanciaMinCm,
+        distanciaMaxCm, muestras, deteccionesIr, ingresosConfirmados, timestamp
+credencialesDispositivo/{sha256(token)}   organizacionId, dispositivoId, revoked
+mediciones/{id}                           copia pública opcional para la demo
+```
 
-- Intervalo ultrasónico configurado: **5 segundos**.
-- Maximo esperado en condiciones normales: **12 lecturas por minuto**.
-- Referencia de espacio libre configurada: **23 cm**.
-- Histéresis: el umbral de ocupado es 5 cm por debajo de la referencia (18 cm); el de libre es 3 cm por debajo (20 cm). Se requieren varias lecturas consecutivas para confirmar un cambio y evitar oscilaciones por ruido.
-- El procesador valida las lecturas y calcula promedio, minimo, maximo, cantidad de muestras, estado y cantidad de eventos IR recibidos para cada minuto.
-- La vista de logs en vivo mostro distancia y estado aproximadamente cada cinco segundos. `Ctrl+C` cierra esa vista, no detiene por si mismo los servicios.
-- El servicio de sincronizacion conserva pendientes en una base SQLite persistente y los reintenta. En esta configuracion forma lotes de hasta cinco registros y tambien envia los pendientes cuando vencen los tiempos de espera configurados.
-
-## Evidencia observada el 15 de octubre
-
-1. El `docker compose build` termino correctamente despues de quitar del Dockerfile la instalacion desde el repositorio Raspberry Pi que Debian rechazaba por su firma. No se desactivo la verificacion de firmas.
-2. Se confirmaron importables en la Pi `gpiozero`, `lgpio` y `paho-mqtt`.
-3. Los servicios MQTT, procesamiento y sincronizacion aparecieron `healthy`; el servicio ultrasónico aparecio `active`.
-4. En logs de procesamiento se vieron lecturas en vivo y cambios `LIBRE`/`OCUPADO` al mover un objeto de prueba frente al HC-SR04.
-5. Se vio en Firestore un documento de `mediciones` con `distanciaCm`, `estado`, `muestras`, `periodoInicio`, minimos y maximos. Un ejemplo visible fue un resumen del periodo de las 18:20 con distancia media de 25.32 cm, estado `LIBRE` y 12 muestras.
-6. Los logs de sincronizacion mostraron mensajes `Uploaded batch of 5 minute records` y `Uploaded batch of 4 minute records`. Otro lote de cinco registros se confirmo en logs a las 21:21 UTC (18:21 en UTC-3).
-7. Antes de reanudar el flujo se eliminaron, con autorizacion, cinco registros especificos de la cola local que correspondian a pruebas antiguas. Esto **no borro** documentos que ya se hubieran enviado a Firestore.
-8. En una prueba controlada, el IR publico eventos cada pocos segundos mientras el usuario confirmo que no movia nada frente al sensor. Se detuvo para no confiar en esos conteos. Los documentos con `deteccionesIr` de ese intervalo pueden contener eventos falsos.
-9. La Raspberry se apago accidentalmente y luego volvio a arrancar. Los documentos que ya estaban en Firestore permanecieron; el intervalo apagado no tiene lecturas y es una interrupcion de la captura.
-
-Los relojes de algunos logs de contenedores aparecen en UTC. Para compararlos con la hora local de Chile continental usada en las capturas de Firebase, convertir UTC a UTC-3 en la fecha de esta bitacora.
-
-## Modelo de los documentos en Firestore
-
-Coleccion: `mediciones`. Los documentos agregados usan un identificador estable por dispositivo y minuto para que los reintentos no creen duplicados. Los campos observados o previstos en cada resumen son:
-
-| Campo | Significado |
+| Decisión | Justificación |
 | --- | --- |
-| `recordId` / ID de documento | Identificador idempotente del dispositivo y minuto |
-| `sensorId` | Identificador del dispositivo, por ejemplo `raspberry-pi-1` |
-| `periodoInicio` | Inicio del minuto resumido |
-| `distanciaCm` | Distancia promedio del minuto |
-| `distanciaMinCm`, `distanciaMaxCm` | Extremos de las muestras validas del minuto |
-| `muestras` | Numero de muestras ultrasónicas incluidas |
-| `estado` | Estado estabilizado: `LIBRE` u `OCUPADO` |
-| `deteccionesIr` | Eventos IR recibidos durante ese minuto; no confiable durante la prueba descrita |
-| `timestamp` | Hora de escritura del documento |
+| Un documento **por minuto** con promedio, mínimo, máximo y conteos | 1.440 escrituras/día por dispositivo en vez de 17.280 (una por lectura cada 5 s) |
+| ID determinista `dispositivo_minuto` | Los reintentos sobrescriben el mismo documento: **sin duplicados** |
+| Subcolección por organización | Aislamiento natural en Security Rules y consultas acotadas a una organización |
+| `ultimaMedicion` dentro del dispositivo | El estado actual se obtiene leyendo 1 documento |
+| Credencial guardada como hash SHA-256 | Si se filtra la base no se filtran los tokens; revocar = `revoked: true` |
+| Índices solo en `periodoInicio` y `sensorId` | Son los únicos campos consultados; el resto está exento ([firestore.indexes.json](firestore.indexes.json)) y reduce ~70 % el almacenamiento |
 
-La base no guarda un documento por cada lectura de cinco segundos: guarda un resumen por minuto. Si operara sin interrupciones durante una semana, el orden de magnitud esperado seria **10.080 documentos** (1.440 por dia). Es una estimacion; el resultado real debe calcularse usando los documentos y metricas efectivamente registrados.
+Consultas que realiza la plataforma:
 
-## Plataforma web
+| Consulta | Índice |
+| --- | --- |
+| Mediciones de la organización ordenadas por `periodoInicio desc`, `limit 100` (tiempo real) | Simple automático en `periodoInicio` |
+| Histórico por rango `periodoInicio >= desde AND <= hasta`, paginado con cursor | Simple automático en `periodoInicio` |
+| Organizaciones de un usuario: `collectionGroup("miembros").where("uid", "==", uid)` | Simple con alcance de grupo de colecciones (definido en `fieldOverrides`) |
+| Credenciales de un dispositivo: `where("dispositivoId", "==", id)` | Simple automático |
 
-URL pública: https://solemne-1-ti.vercel.app
+## API REST
 
-`index.html` conserva el panel público de demostración, con el estado y la
-distancia más recientes actualizados en vivo, y filtros con histórico
-paginado. El panel privado añade inicio de sesión con Firebase Authentication
-y una suscripción en tiempo real a las mediciones de cada organización. Los
-roles son `admin` (administra organizaciones, dispositivos,
-configuración y usuarios) y `operator` (consulta el panel, los históricos y
-las alertas).
+Base: `https://solemne-1-ti.vercel.app`. Todas las respuestas son JSON; los
+errores tienen la forma `{"error": "mensaje"}`.
 
-Los datos de cada organización se guardan en
-`organizaciones/{organizacionId}` y no se incluyen por defecto en la colección
-pública de demostración `mediciones`. Un administrador puede marcar
-explícitamente un dispositivo para publicar allí una copia del flujo de demo;
-los demás dispositivos permanecen privados. La API valida Firebase ID tokens y membresía de
-organización; `firestore.rules` permite lecturas en tiempo real únicamente a
-miembros y bloquea escrituras desde el navegador. Las alertas del panel
-incluyen ocupación/distancia configurada y ausencia de lecturas recientes.
-El umbral de ausencia se valida contra el intervalo del dispositivo más seis
-minutos de margen para la agregación y el envío por lotes, evitando alertas
-prematuras por el funcionamiento normal de la cola.
-Los ajustes de distancia libre e intervalo se sincronizan con la Raspberry
-cada 30 segundos por medio de la API y MQTT local.
-
-El panel público con datos reales se verificó en producción el 20 de octubre
-de 2026. La implementación actual de estas funciones nuevas **aún debe
-desplegarse y verificarse en Vercel**, y las reglas deben publicarse en
-Firestore antes de habilitar el acceso privado.
-
-### Endpoints de la API
-
-| Metodo y ruta | Acceso | Funcion |
+| Método y ruta | Autenticación | Función |
 | --- | --- | --- |
-| `GET /api/configuracion?deviceId=<id>` | Token del dispositivo (`API_TOKEN`) | Recupera la configuracion remota del dispositivo sin cache. |
-| `POST /api/configuracion` | Token administrativo (`ADMIN_API_TOKEN`) | Actualiza parcialmente distancia libre (5–200 cm) y/o intervalo de muestreo (0.1–3600 s) en `configuracion_dispositivos`. |
+| `GET /api/configuracion-publica` | Pública | Configuración web de Firebase (clave pública del cliente) |
+| `GET /api/mediciones?limit&from&to&cursor` | Pública | Página de la colección de demostración (caché 60 s en el edge) |
+| `GET /api/mediciones?scope=organizacion&organizacion=<id>&...` | ID token + miembro | Histórico paginado de la organización |
+| `POST /api/mediciones` | Token del dispositivo | Guarda 1–100 agregados validados en su organización |
+| `GET /api/configuracion-dispositivo` | Token del dispositivo | Configuración vigente del dispositivo |
+| `GET /api/sesion` | ID token | Organizaciones y rol del usuario |
+| `POST /api/iniciar-organizacion` | ID token del admin inicial | Crea la primera organización (variables `BOOTSTRAP_*`) |
+| `POST /api/organizaciones` | ID token, rol admin | Crea otra organización |
+| `GET/POST/PATCH/DELETE /api/dispositivos` | Miembro (GET) / admin | Alta, configuración, renovación y revocación de tokens |
+| `GET/POST/PATCH/DELETE /api/usuarios` | Admin | Miembros y roles de la organización |
 
-Las rutas `/api/configuracion` se conservan para compatibilidad con clientes
-anteriores y usan `ADMIN_API_TOKEN` para cambios. El panel actual administra
-los dispositivos autenticados dentro de una organización; su configuración
-remota llega a la Raspberry sin reiniciar los servicios. Los valores de `.env`
-son los valores iniciales mientras no exista configuración remota para el
-dispositivo. Solo se aplican ajustes ultrasónicos; no activan ni modifican IR.
-
-| Metodo y ruta | Acceso | Funcion |
-| --- | --- | --- |
-| `GET /api/mediciones?limit=100&from=<ISO-8601>&to=<ISO-8601>&cursor=<token>` | Publico, solo lectura | Devuelve una pagina de agregados ordenados por periodo descendente, con un cursor opaco para la pagina siguiente. `from` y `to` son opcionales e inclusivos; el panel solicita paginas de 100 hasta completar el rango. La API limita cada pagina a 500. |
-| `POST /api/mediciones` | `Authorization: Bearer <API_TOKEN>` | Valida y guarda una medicion o un lote de hasta 100 registros en Firestore. Los lotes requieren `recordId` unico por registro. |
-
-Rutas adicionales para el panel privado:
-
-| Método y ruta | Acceso | Función |
-| --- | --- | --- |
-| `GET /api/configuracion-publica` | Público | Devuelve la configuración web pública requerida por Firebase Authentication. |
-| `GET /api/sesion` | Firebase ID token | Devuelve las organizaciones y roles de la cuenta autenticada. |
-| `GET /api/mediciones?scope=organizacion&organizacion=<id>&...` | ID token y membresía | Consulta históricos paginados de esa organización. |
-| `POST /api/mediciones` | Credencial de dispositivo | Guarda los datos en la organización asociada y crea una copia en el demo público solo si el administrador marcó el dispositivo para publicarlo. `API_TOKEN` legado mantiene la colección pública de demostración. |
-| `POST /api/iniciar-organizacion` | Administrador inicial verificado | Inicializa una vez la organización indicada por las variables `BOOTSTRAP_*`. |
-| `POST /api/organizaciones` | Administrador | Crea otra organización y agrega al administrador que la creó. |
-| `GET/POST/PATCH/DELETE /api/dispositivos` | Miembro para lectura; administrador para cambios | Administra dispositivos, credenciales y configuración. El secreto solo se muestra al crearlo. |
-| `GET/POST/PATCH/DELETE /api/usuarios` | Administrador | Administra miembros y asigna roles. |
-| `GET /api/configuracion-dispositivo` | Credencial de dispositivo | Entrega al dispositivo su configuración remota. |
-
-### Activación del acceso privado
-
-1. Habilita **Correo electrónico y contraseña** en Firebase Authentication y
-   agrega `solemne-1-ti.vercel.app` a los dominios autorizados.
-2. Configura en Vercel `FIREBASE_PROJECT_ID`, `FIREBASE_WEB_API_KEY`,
-   `FIREBASE_WEB_APP_ID` y `FIREBASE_SERVICE_ACCOUNT_JSON`;
-   `FIREBASE_AUTH_DOMAIN` es opcional. La
-   cuenta de servicio es privada; la clave web es configuración pública del
-   cliente.
-3. Publica `firestore.rules` desde Firebase Console o ejecuta
-   `firebase deploy --only firestore:rules` con Firebase CLI configurado.
-4. Crea la primera cuenta en Firebase Authentication, verifica el correo y
-   configura temporalmente `BOOTSTRAP_ADMIN_EMAIL`,
-   `BOOTSTRAP_ORGANIZATION_ID` y `BOOTSTRAP_ORGANIZATION_NAME` en Vercel. Luego
-   inicia sesión y usa **Configurar organización inicial**. Cuando termine,
-   elimina las tres variables de bootstrap y vuelve a desplegar.
-5. Desde la administración, crea organizaciones, asigna operadores y
-   configura dispositivos. Comparte los enlaces para establecer contraseñas
-   por un canal privado y guarda el token del dispositivo como secreto en la
-   Raspberry. El token se muestra una sola vez.
-
-La consulta `GET /api/mediciones` aplica cache compartida durante 60 segundos, con hasta 5 minutos de revalidacion en segundo plano. Solo se cachean respuestas GET exitosas; las escrituras POST no se cachean. Esto reduce lecturas repetidas de Firestore para la misma URL. Los datos recientes pueden tardar hasta un minuto en actualizarse y, durante la revalidacion, se puede servir una respuesta anterior.
-
-Cuando se restablezca la cuota de Firestore, abre el panel y confirma que se muestren mediciones y que `GET /api/mediciones?limit=1` responda con HTTP 200 y un arreglo `records`. Si la pagina sigue mostrando un error, espera al menos un minuto y vuelve a consultar; si persiste, revisa los logs de la funcion en Vercel y la cuota/estado de Firestore. Evita recargar repetidamente durante la cuota agotada.
-
-El proyecto Vercel se conecta al repositorio GitHub en la rama `main`. Para cada cambio aceptado, revisar **Deployments** y confirmar que la implementacion de produccion quede en estado `Ready` antes de compartir la URL.
-
-Los documentos ya recibidos se mantienen en Firestore; no se deben copiar al repositorio GitHub. GitHub contiene el codigo y la documentacion, mientras que el informe puede incluir un CSV exportado de Firestore si se necesita entregar un respaldo de datos. Antes de compartir ese CSV, quitar cualquier dato sensible y etiquetar claramente las mediciones reales y simuladas.
-
-## Comandos utiles para supervisar la Raspberry
-
-Ejecutar en SSH, desde `~/estacionamiento`:
+Ejemplos:
 
 ```bash
-cd ~/estacionamiento
-sudo docker compose ps
-sudo systemctl is-active estacionamiento-adquisicion-ultrasonico.service
-sudo docker compose logs -f --since=0s procesamiento
-sudo docker compose logs --since=15m sincronizacion
+# Envío de un lote desde la Raspberry (lo hace el servicio sincronizacion)
+curl -X POST https://solemne-1-ti.vercel.app/api/mediciones \
+  -H "Authorization: Bearer $TOKEN_DISPOSITIVO" -H "Content-Type: application/json" \
+  -d '{"records":[{"recordId":"raspberry-pi-1_1792782000","sensorId":"raspberry-pi-1",
+       "periodoInicio":"2026-10-23T19:00:00Z","distanciaCm":12.4,"distanciaMinCm":11.9,
+       "distanciaMaxCm":13.0,"muestras":12,"deteccionesIr":1,"ingresosConfirmados":1,
+       "estado":"OCUPADO"}]}'
+# 201 {"ids":["raspberry-pi-1__raspberry-pi-1_1792782000"],"saved":true,"count":1,"scope":"organizacion"}
+
+# Configuración vigente del dispositivo
+curl https://solemne-1-ti.vercel.app/api/configuracion-dispositivo -H "Authorization: Bearer $TOKEN_DISPOSITIVO"
+# 200 {"deviceId":"raspberry-pi-1","settings":{"distanciaLibreCm":23,"intervaloMuestreoSegundos":5,
+#      "umbralAlertaCm":20,"tiempoDesconexionSegundos":600}}
+
+# Histórico privado (ID token de Firebase Auth del usuario)
+curl "https://solemne-1-ti.vercel.app/api/mediciones?scope=organizacion&organizacion=$ORG&from=2026-10-22T00:00:00Z&limit=100" \
+  -H "Authorization: Bearer $ID_TOKEN"
+# 200 {"records":[...],"nextCursor":"eyJwZXJpb2Rv..."}
+
+# Cambiar la configuración de un dispositivo (admin)
+curl -X PATCH https://solemne-1-ti.vercel.app/api/dispositivos -H "Authorization: Bearer $ID_TOKEN" \
+  -H "Content-Type: application/json" -d '{"organizacion":"'$ORG'","dispositivoId":"raspberry-pi-1",
+  "configuracion":{"distanciaLibreCm":25,"intervaloMuestreoSegundos":10,"umbralAlertaCm":20,"tiempoDesconexionSegundos":600}}'
+# 200 {"saved":true}
 ```
 
-- En procesamiento, buscar `Live reading`, `Minute aggregate published` y un estado razonable para la situacion fisica.
-- En sincronizacion, buscar `Uploaded batch`.
-- En Firestore, revisar la coleccion `mediciones` y que los documentos recientes tengan `distanciaCm`, `estado` y un `periodoInicio` actual.
-- Para salir de una vista `logs -f`, pulsar `Ctrl+C`; no apagar ni cerrar la Raspberry.
-- Si se pierde Internet, revisar la cola local; los registros pendientes deben conservarse para reintento.
-- Evitar `docker compose down -v`: podria eliminar volumenes persistentes. No borrar datos de Firestore como parte de pruebas sin una decision explicita y respaldo.
+Validaciones de `POST /api/mediciones`: `distanciaCm` 0–200, `estado` `LIBRE|OCUPADO`,
+`sensorId` igual al dispositivo del token, `min ≤ promedio ≤ max`, conteos
+enteros 0–10.000, `recordId` único por lote. `tiempoDesconexionSegundos` debe
+superar el intervalo + 360 s para no alertar durante el envío por lotes.
 
-## Seguridad y configuracion
+## Seguridad
 
-- La Raspberry solo envia datos a la API HTTPS de Vercel; las credenciales administrativas de Firebase deben permanecer en variables de entorno protegidas de Vercel.
-- El token de dispositivo y el bypass de proteccion de Vercel se montan como secretos locales de Docker. **No incluir sus valores, la clave de servicio Firebase ni archivos `.env` en informes, capturas, ZIP o repositorios.**
-- MQTT esta publicado solo en `127.0.0.1`, no en todas las interfaces de red.
-- El ECHO del HC-SR04 debe permanecer limitado a 3.3 V en el GPIO de la Raspberry.
+- La Raspberry **solo inicia conexiones HTTPS salientes**; no abre puertos (MQTT
+  escucha en `127.0.0.1`) ni usa túneles.
+- La cuenta de servicio de Firebase existe **solo** como variable de entorno en
+  Vercel (`FIREBASE_SERVICE_ACCOUNT_JSON`). Nunca en la Pi ni en el repositorio
+  (`.gitignore` bloquea `serviceAccount*.json` y `*-firebase-adminsdk-*.json`).
+- Cada dispositivo tiene **su propio token** (32 bytes aleatorios), generado en
+  el panel, mostrado una sola vez, guardado como hash y **revocable** o renovable.
+- En la Pi el token es un secreto de Docker montado en `/run/secrets`, fuera del
+  código y de la imagen.
+- **Security Rules** ([firestore.rules](firestore.rules)): el navegador no puede
+  escribir; solo lee los datos de organizaciones donde es miembro con rol
+  `admin` u `operator` y correo verificado.
+- Roles: `admin` administra organizaciones, dispositivos y usuarios; `operator`
+  consulta dashboard, históricos y alertas.
 
-## Pendientes antes de afirmar que el requisito completo esta cumplido
+## Despliegue desde cero
 
-### Aclaracion del profesor (15 de octubre de 2026, 18:50)
+### 1. Firebase (plan Spark, sin tarjeta)
 
-El profesor Luis Delgado respondio que **no es necesario que el IR funcione** y que se pueden generar datos dummy si no se logra cumplir la meta de siete dias. Por lo tanto, se mantiene el IR detenido y no se deben presentar sus activaciones falsas como mediciones. Si se usan datos dummy, identificarlos claramente como simulados y separarlos de las mediciones reales del ultrasónico; no mezclarlos ni describirlos como capturados por sensores.
+1. Crea el proyecto y una base Firestore en modo producción (este proyecto usa
+   `southamerica-west1`).
+2. **Authentication → Sign-in method:** habilita *Correo electrónico/contraseña*
+   y agrega el dominio de Vercel a *Dominios autorizados*.
+3. Registra una app web y copia `apiKey` y `appId`.
+4. **Configuración → Cuentas de servicio → Generar clave privada.** Guarda el
+   JSON **fuera del repositorio** (por ejemplo `C:\claves\estacionamiento.json`).
+5. Publica reglas e índices:
+   ```bash
+   npm install -g firebase-tools
+   firebase login
+   firebase use estacionamiento-intelige-f3038
+   firebase deploy --only firestore:rules,firestore:indexes
+   ```
 
-El enunciado solicita, entre otros puntos:
+### 2. Vercel (plan Hobby)
 
-- Dos o mas sensores de tipos distintos que generen datos reales, combinados para producir informacion util.
-- Al menos tres microservicios en contenedores Docker, comunicados por MQTT o API interna.
-- Adquisicion configurable, resiliencia local, despliegue automatico y verificaciones de salud.
-- Almacenamiento Firestore mediante API de Vercel y plataforma web para consultar datos y configurar dispositivos.
-- Operacion continua durante al menos siete dias y comparacion de consumo estimado con las consolas de Firebase y Vercel.
+1. Importa el repositorio de GitHub en Vercel (sin framework, raíz del repo).
+   Cada push a `main` despliega automáticamente.
+2. Variables de entorno (Production):
 
-El trabajo de hoy deja evidencia de la ruta ultrasónica hasta Firestore, pero **no demuestra por si solo que todos esos requisitos esten completos**:
+   | Variable | Valor |
+   | --- | --- |
+   | `FIREBASE_SERVICE_ACCOUNT_JSON` | Contenido completo del JSON de la cuenta de servicio |
+   | `FIREBASE_PROJECT_ID` | `estacionamiento-intelige-f3038` |
+   | `FIREBASE_WEB_API_KEY` / `FIREBASE_WEB_APP_ID` | Datos de la app web |
+   | `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ORGANIZATION_ID`, `BOOTSTRAP_ORGANIZATION_NAME` | Solo para crear la primera organización; bórralas después |
+   | `API_TOKEN` | *(Opcional, legado)* token global que escribe solo en la demo pública. Déjala vacía para desactivarlo |
 
-1. El IR esta detenido porque dio activaciones falsas sin movimiento. Segun la aclaracion del profesor, no es necesario que funcione para esta entrega; mantener sus conteos fuera de los resultados validos.
-2. Los lectores GPIO se ejecutan como servicios systemd en el host de la Pi, no como contenedores. Esta solucion permitio usar los paquetes GPIO ya instalados y evitar el repositorio APT rechazado, pero debe revisarse contra el requisito de contenedorizacion con el docente o adaptarse de forma segura.
-3. El código ya implementa acceso con dos roles, datos separados por organización, panel privado en tiempo real, históricos, alertas y administración/configuración remota de dispositivos. **La implementación aún no está verificada en producción**: configurar Firebase/Vercel, publicar las reglas de Firestore, actualizar la Raspberry y probar dos organizaciones antes de afirmar que el requisito está cumplido.
-4. La Pi disponible es una Raspberry Pi 4; el enunciado menciona Pi 3. Confirmar con el docente que la Pi 4 es aceptada como equivalente.
-5. El usuario declaro el inicio de la recoleccion ultrasónica el 15 de octubre a las 18:35 (UTC-3); el IR permanece detenido y no forma parte de estos datos validos. Anotar paradas, cortes de red, reinicios y pruebas con objetos. Si no se alcanza la meta de siete dias y se generan datos dummy, etiquetarlos y analizarlos por separado como simulados. Si hubo una interrupcion, informar el tiempo real de operacion continua y no describirlo como siete dias continuos. Las pruebas controladas no deben describirse como ocupacion real.
-6. Al terminar, exportar los datos, contar registros y huecos, comparar consumo real de Firebase/Vercel con estimaciones y preparar graficos/conclusiones.
+3. Si activas *Deployment Protection*, crea un *Protection Bypass for
+   Automation* y guárdalo en la Pi como `vercel-bypass.txt`.
 
-## Resumen para futura presentacion
+### 3. Primer administrador y dispositivo
 
-> Se implemento una ruta de adquisicion de distancia en una Raspberry Pi. El HC-SR04 toma lecturas cada cinco segundos; un procesador estabiliza el estado del puesto y agrega las lecturas por minuto; una cola SQLite protege los agregados ante fallas de conectividad; y un servicio de sincronizacion los envia por lotes a una API HTTPS en Vercel, que escribe en Firestore. Se verificaron lecturas y documentos con distancia y estado. La recoleccion ultrasónica de siete dias se declaro iniciada el 15 de octubre de 2026 a las 18:35 (UTC-3), con termino previsto el 22 de octubre a las 18:35 si no hay interrupciones. La prueba del IR detecto activaciones falsas y fue suspendida. La evaluacion final comparara volumen estimado y consumo medido en Firebase y Vercel.
+1. Crea tu usuario en Firebase Authentication, verifica el correo e inicia
+   sesión en la plataforma → **Configurar organización inicial**.
+2. En **Dispositivos**, crea `raspberry-pi-1` y copia el token (se muestra una vez).
+3. En **Usuarios y roles**, agrega un operador para la cuenta de prueba de consulta.
+
+### 4. Raspberry Pi
+
+Sigue [raspberry/README.md](raspberry/README.md).
+
+### Desarrollo local
+
+```bash
+npm ci
+npm run check          # verificación sin credenciales
+npx vercel dev         # API + web en http://localhost:3000 (usa variables de .env.local)
+```
+
+## Checklist de la demostración (rúbrica, criterio 7)
+
+1. **Datos en tiempo real:** panel privado abierto; mover un objeto frente al
+   HC-SR04 y ver el cambio LIBRE → OCUPADO (y el aviso emergente) en ≤ 6 min
+   (1 min de agregación + lote de 5).
+2. **Cambio de configuración:** editar *Intervalo* o *Distancia libre* en el
+   panel y mostrar en `docker compose logs -f adquisicion-ultrasonico procesamiento`
+   el mensaje `Remote ... updated` (≤ 60 s), sin reiniciar nada.
+3. **Recuperación tras desconexión:** apagar el hotspot 3–5 min, mostrar la cola
+   (`registros pendientes > 0`), reconectar y ver `Uploaded batch`; los
+   documentos aparecen sin duplicados (ID por minuto).
+4. **Estado de los microservicios:** `docker compose ps` con los 5 contenedores `healthy`.
+5. **Aislamiento:** iniciar sesión con un usuario de otra organización y mostrar
+   que no ve los dispositivos ni las mediciones; intentar leer por consola de
+   Firestore desde el navegador devuelve `permission-denied`.
+
+## Solución de problemas
+
+| Síntoma | Causa y solución |
+| --- | --- |
+| `/api/mediciones` responde 500 y Firestore dice `Quota exceeded` | Se agotó la cuota diaria gratuita. Se restablece a medianoche hora del Pacífico (≈ 04:00 en Chile con horario de verano). Mientras tanto la Pi guarda las lecturas en la cola SQLite y las reenvía después. Evita exportaciones completas o recargas masivas del panel. |
+| `/api/sesion` responde 500 | Falta el índice de grupo de colecciones `miembros.uid`: `firebase deploy --only firestore:indexes` |
+| El panel privado dice *permission-denied* | Reglas no publicadas o el usuario no tiene correo verificado/rol |
+| `sincronizacion` registra HTTP 401 | Token revocado o mal copiado en `api-token.txt`; renueva la credencial en el panel |
+
+## Scripts de apoyo
+
+Todos leen la cuenta de servicio desde `--credencial <ruta fuera del repo>`,
+`GOOGLE_APPLICATION_CREDENTIALS` o `FIREBASE_SERVICE_ACCOUNT_JSON`.
+
+| Comando | Uso |
+| --- | --- |
+| `npm run check` | Verificación local sin credenciales |
+| `npm run uso -- --credencial C:\claves\sa.json --organizacion <id> --dias 8` | Documentos por día y almacenamiento estimado (usa `count()`, casi no consume lecturas) |
+| `npm run exportar -- --credencial ... --organizacion <id> --desde <ISO> --hasta <ISO>` | Exporta a CSV/JSON en `exportaciones/` (1 lectura por documento) |
+| `npm run proyeccion` | Tabla de proyección de consumo y costos para 1/10/100/1.000 dispositivos |

@@ -27,6 +27,7 @@ function isValidMeasurement(record) {
     distanciaMaxCm,
     muestras,
     deteccionesIr,
+    ingresosConfirmados,
     periodoInicio,
     recordId,
     estado,
@@ -61,6 +62,10 @@ function isValidMeasurement(record) {
       (!Number.isInteger(deteccionesIr) ||
         deteccionesIr < 0 ||
         deteccionesIr > 10000)) ||
+    (ingresosConfirmados !== undefined &&
+      (!Number.isInteger(ingresosConfirmados) ||
+        ingresosConfirmados < 0 ||
+        ingresosConfirmados > 10000)) ||
     (periodoInicio !== undefined &&
       (typeof periodoInicio !== "string" ||
         !Number.isFinite(Date.parse(periodoInicio)))) ||
@@ -82,6 +87,7 @@ function toFirestoreMeasurement(record) {
     "distanciaMaxCm",
     "muestras",
     "deteccionesIr",
+    "ingresosConfirmados",
   ]) {
     if (record[field] !== undefined) measurement[field] = record[field];
   }

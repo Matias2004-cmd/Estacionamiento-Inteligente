@@ -1,3 +1,30 @@
+# Cinco contenedores, cada uno con una responsabilidad:
+#   mqtt                    broker Mosquitto que desacopla productores y consumidores
+#   adquisicion-ultrasonico lee el HC-SR04 (GPIO17/27) y publica sensores/ultrasonico
+#   adquisicion-ir          lee el módulo IR (GPIO18) y publica sensores/ir
+#   procesamiento           valida, combina ambos sensores y agrega por minuto
+#   sincronizacion          cola SQLite, envío por lotes HTTPS y configuración remota
+# Todos usan restart: unless-stopped, así que arrancan solos al encender la Pi
+# (requiere `sudo systemctl enable docker`).
+
+x-python-service: &python-service
+  build: .
+  image: estacionamiento-servicios:latest
+  restart: unless-stopped
+  depends_on:
+    mqtt:
+      condition: service_healthy
+  networks:
+    - estacionamiento
+  tmpfs:
+    - /tmp
+  healthcheck:
+    test: ["CMD", "python3", "/opt/estacionamiento/salud.py"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 30s
+
 services:
   mqtt:
     image: eclipse-mosquitto:2
@@ -20,43 +47,52 @@ services:
       timeout: 5s
       retries: 3
 
+  adquisicion-ultrasonico:
+    <<: *python-service
+    container_name: estacionamiento-adquisicion-ultrasonico
+    command: ["python3", "servicios/adquisicion/ultrasonico.py"]
+    # Acceso solo al chip GPIO, sin modo privilegiado.
+    devices:
+      - /dev/gpiochip0:/dev/gpiochip0
+    environment:
+      MQTT_HOST: mqtt
+      DEVICE_ID: ${DEVICE_ID:-raspberry-pi-1}
+      SAMPLE_INTERVAL_SECONDS: ${SAMPLE_INTERVAL_SECONDS:-5}
+      TRIGGER_GPIO: "17"
+      ECHO_GPIO: "27"
+      MAX_DISTANCE_M: "2"
+
+  adquisicion-ir:
+    <<: *python-service
+    container_name: estacionamiento-adquisicion-ir
+    command: ["python3", "servicios/adquisicion/ir.py"]
+    devices:
+      - /dev/gpiochip0:/dev/gpiochip0
+    environment:
+      MQTT_HOST: mqtt
+      SENSOR_ID: entrada-ir-1
+      IR_GPIO: "18"
+      IR_ACTIVE_LEVEL: ${IR_ACTIVE_LEVEL:-0}
+      IR_PULL: ${IR_PULL:-none}
+      IR_DEBOUNCE_SECONDS: ${IR_DEBOUNCE_SECONDS:-0.15}
+
   procesamiento:
-    build: .
+    <<: *python-service
     container_name: estacionamiento-procesamiento
     command: ["python3", "servicios/procesamiento/procesar.py"]
-    restart: unless-stopped
-    depends_on:
-      mqtt:
-        condition: service_healthy
     environment:
       MQTT_HOST: mqtt
       DEVICE_ID: ${DEVICE_ID:-raspberry-pi-1}
       DISTANCIA_LIBRE_CM: ${DISTANCIA_LIBRE_CM:-23}
+      VENTANA_INGRESO_SEGUNDOS: ${VENTANA_INGRESO_SEGUNDOS:-60}
       MQTT_SAMPLE_TOPIC: sensores/ultrasonico
       MQTT_IR_TOPIC: sensores/ir
       MQTT_AGGREGATE_TOPIC: procesados/mediciones
-    networks:
-      - estacionamiento
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import socket; s=socket.create_connection(('mqtt',1883),3); s.close()",
-        ]
-      interval: 30s
-      timeout: 5s
-      retries: 3
 
   sincronizacion:
-    build: .
+    <<: *python-service
     container_name: estacionamiento-sincronizacion
     command: ["python3", "servicios/sincronizacion/sincronizar.py"]
-    restart: unless-stopped
-    depends_on:
-      mqtt:
-        condition: service_healthy
     secrets:
       - api_token
       - vercel_bypass
@@ -66,27 +102,14 @@ services:
       MQTT_HOST: mqtt
       DEVICE_ID: ${DEVICE_ID:-raspberry-pi-1}
       MQTT_AGGREGATE_TOPIC: procesados/mediciones
-      API_URL: https://solemne-1-ti.vercel.app/api/mediciones
-      DEVICE_CONFIG_URL: https://solemne-1-ti.vercel.app/api/configuracion-dispositivo
-      DEVICE_CONFIG_POLL_SECONDS: ${DEVICE_CONFIG_POLL_SECONDS:-30}
+      API_URL: ${API_BASE_URL:-https://solemne-1-ti.vercel.app}/api/mediciones
+      DEVICE_CONFIG_URL: ${API_BASE_URL:-https://solemne-1-ti.vercel.app}/api/configuracion-dispositivo
+      DEVICE_CONFIG_POLL_SECONDS: ${DEVICE_CONFIG_POLL_SECONDS:-60}
       API_TOKEN_FILE: /run/secrets/api_token
       VERCEL_BYPASS_FILE: /run/secrets/vercel_bypass
       OUTBOX_PATH: /var/lib/estacionamiento/outbox.sqlite3
       BATCH_SIZE: "5"
       BATCH_MAX_WAIT_SECONDS: "300"
-    networks:
-      - estacionamiento
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import socket; s=socket.create_connection(('mqtt',1883),3); s.close()",
-        ]
-      interval: 30s
-      timeout: 5s
-      retries: 3
 
 networks:
   estacionamiento:
@@ -96,8 +119,9 @@ volumes:
   mqtt_data:
   sync_data:
 
+# Los secretos viven fuera del repositorio y de la imagen; Docker los monta en /run/secrets.
 secrets:
   api_token:
-    file: /home/matiascatalan/.config/estacionamiento/api-token.txt
+    file: ${SECRETS_DIR:-/home/matiascatalan/.config/estacionamiento}/api-token.txt
   vercel_bypass:
-    file: /home/matiascatalan/.config/estacionamiento/vercel-bypass.txt
+    file: ${SECRETS_DIR:-/home/matiascatalan/.config/estacionamiento}/vercel-bypass.txt

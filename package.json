@@ -7,7 +7,11 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "vercel dev"
+    "dev": "vercel dev",
+    "check": "node scripts/verificar.js",
+    "exportar": "node scripts/exportar-firestore.js",
+    "uso": "node scripts/medir-uso.js",
+    "proyeccion": "node scripts/proyeccion-costos.js"
   },
   "dependencies": {
     "firebase-admin": "^13.5.0"

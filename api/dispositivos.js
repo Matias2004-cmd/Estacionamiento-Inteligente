@@ -106,16 +106,75 @@ module.exports = async function handler(req, res) {
     }
 
     if (req.method === "PATCH") {
-      const { dispositivoId, nombre, configuracion, publicarEnDemo } = req.body || {};
+      const {
+        dispositivoId,
+        nombre,
+        configuracion,
+        publicarEnDemo,
+        renovarCredencial,
+      } = req.body || {};
       if (
         typeof dispositivoId !== "string" ||
         !/^[A-Za-z0-9_-]{1,64}$/.test(dispositivoId) ||
         (nombre !== undefined && (typeof nombre !== "string" || !nombre.trim() || nombre.length > 100)) ||
         (publicarEnDemo !== undefined && typeof publicarEnDemo !== "boolean") ||
+        (renovarCredencial !== undefined && typeof renovarCredencial !== "boolean") ||
         (configuracion !== undefined && !validSettings(configuracion))
       ) {
         return res.status(400).json({ error: "Invalid device update" });
       }
+
+      if (renovarCredencial === true) {
+        if (
+          nombre !== undefined ||
+          configuracion !== undefined ||
+          publicarEnDemo !== undefined
+        ) {
+          return res.status(400).json({ error: "Credential renewal cannot include other updates" });
+        }
+
+        const deviceRef = devices.doc(dispositivoId);
+        const token = randomBytes(32).toString("base64url");
+        const credentialRef = db.doc(
+          `credencialesDispositivo/${hashDeviceToken(token)}`,
+        );
+
+        await db.runTransaction(async (transaction) => {
+          const deviceSnapshot = await transaction.get(deviceRef);
+          if (!deviceSnapshot.exists) {
+            const error = new Error("Device not found");
+            error.status = 404;
+            throw error;
+          }
+          if (deviceSnapshot.data().activo !== true) {
+            const error = new Error("Device is not active");
+            error.status = 409;
+            throw error;
+          }
+
+          const existingCredentials = await transaction.get(
+            db
+              .collection("credencialesDispositivo")
+              .where("dispositivoId", "==", dispositivoId),
+          );
+          existingCredentials.docs
+            .filter(
+              (document) =>
+                document.data().organizacionId === context.organizationId &&
+                document.data().revoked !== true,
+            )
+            .forEach((document) => {
+              transaction.update(document.ref, { revoked: true });
+            });
+          transaction.create(credentialRef, {
+            organizacionId: context.organizationId,
+            dispositivoId,
+          });
+        });
+
+        return res.status(200).json({ token, renewed: true });
+      }
+
       const update = {};
       if (nombre !== undefined) update.nombre = nombre.trim();
       if (configuracion !== undefined) update.configuracion = configuracion;

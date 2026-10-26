@@ -150,20 +150,25 @@ async function readPage(db, req, res) {
     : 100;
   const cursor = parseCursor(req.query?.cursor);
 
-  let collection = db.collection("mediciones");
+  let query = db.collection("mediciones");
   if (scope === "organizacion") {
     const organization = await requireOrganization(
       req,
       db,
       req.query?.organizacion,
     );
-    collection = db
+    // Las mediciones viven en la coleccion raiz; la organizacion ve las de sus dispositivos.
+    const devices = await db
       .collection("organizaciones")
       .doc(organization.organizationId)
-      .collection("mediciones");
+      .collection("dispositivos")
+      .select()
+      .limit(30)
+      .get();
+    if (devices.empty) return res.status(200).json({ records: [], nextCursor: null });
+    query = query.where("sensorId", "in", devices.docs.map((document) => document.id));
   }
 
-  let query = collection;
   if (from !== undefined) {
     query = query.where("periodoInicio", ">=", Timestamp.fromDate(new Date(from)));
   }
@@ -258,24 +263,12 @@ async function saveMeasurements(db, req, res) {
     return res.status(403).json({ error: "Measurement device does not match credential" });
   }
 
-  const collection = db
-    .collection("organizaciones")
-    .doc(device.organizacionId)
-    .collection("mediciones");
+  // Se guardan solo en la coleccion raiz, junto a la recoleccion de siete dias.
+  const collection = db.collection("mediciones");
   const batch = db.batch();
   const documents = records.map((record) => {
-    const sourceRecordId = record.recordId || randomUUID();
-    const measurement = toFirestoreMeasurement(record);
-    const document = collection.doc(`${device.dispositivoId}__${sourceRecordId}`);
-    batch.set(document, measurement);
-    if (deviceSnapshot.data().publicarEnDemo === true) {
-      batch.set(
-        db
-          .collection("mediciones")
-          .doc(`demo__${device.organizacionId}__${device.dispositivoId}__${sourceRecordId}`),
-        measurement,
-      );
-    }
+    const document = collection.doc(record.recordId || randomUUID());
+    batch.set(document, toFirestoreMeasurement(record));
     return document;
   });
   batch.update(deviceRef, {
@@ -287,7 +280,7 @@ async function saveMeasurements(db, req, res) {
     ids: documents.map((document) => document.id),
     saved: true,
     count: documents.length,
-    scope: "organizacion",
+    scope: "mediciones",
   });
 }
 

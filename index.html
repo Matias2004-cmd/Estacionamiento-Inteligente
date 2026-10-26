@@ -252,6 +252,7 @@
         onSnapshot,
         orderBy,
         query,
+        where,
       } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
 
       const accountMessage = document.querySelector("#account-message");
@@ -641,25 +642,42 @@
         renderPrivateTable([], "#private-history-rows");
         document.querySelector("#organization-alerts").replaceChildren();
         const path = ["organizaciones", currentOrganization.id];
-        measurementUnsubscribe = onSnapshot(
-          query(collection(firestore, ...path, "mediciones"), orderBy("periodoInicio", "desc"), limit(100)),
-          (snapshot) => {
-            if (currentOrganization?.id !== selectedOrganizationId) return;
-            measurements = snapshot.docs.map((document) => ({
-              id: document.id,
-              ...document.data(),
-              periodoInicio: toIsoDate(document.data().periodoInicio),
-            }));
-            notifyPrivateStateChange(measurements[0]?.estado);
-            renderPrivateDashboard();
-          },
-          (error) => setAccountMessage(`No se pudieron recibir mediciones privadas: ${error.message}`, true),
-        );
+        // Las mediciones están en la colección raíz; se filtran por los dispositivos de la organización.
+        let subscribedDeviceIds = null;
+        function subscribeMeasurements(deviceIds) {
+          const key = deviceIds.join(",");
+          if (key === subscribedDeviceIds) return;
+          subscribedDeviceIds = key;
+          measurementUnsubscribe?.();
+          measurementUnsubscribe = null;
+          measurements = [];
+          if (!deviceIds.length) return renderPrivateDashboard();
+          measurementUnsubscribe = onSnapshot(
+            query(
+              collection(firestore, "mediciones"),
+              where("sensorId", "in", deviceIds),
+              orderBy("periodoInicio", "desc"),
+              limit(100),
+            ),
+            (snapshot) => {
+              if (currentOrganization?.id !== selectedOrganizationId) return;
+              measurements = snapshot.docs.map((document) => ({
+                id: document.id,
+                ...document.data(),
+                periodoInicio: toIsoDate(document.data().periodoInicio),
+              }));
+              notifyPrivateStateChange(measurements[0]?.estado);
+              renderPrivateDashboard();
+            },
+            (error) => setAccountMessage(`No se pudieron recibir mediciones privadas: ${error.message}`, true),
+          );
+        }
         deviceUnsubscribe = onSnapshot(
           query(collection(firestore, ...path, "dispositivos"), orderBy("nombre")),
           (snapshot) => {
             if (currentOrganization?.id !== selectedOrganizationId) return;
             devices = snapshot.docs.map((document) => ({ id: document.id, ...document.data() }));
+            subscribeMeasurements(devices.map((device) => device.id).sort().slice(0, 30));
             renderDeviceList();
             renderPrivateDashboard();
           },

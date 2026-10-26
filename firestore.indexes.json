@@ -1,5 +1,14 @@
 {
-  "indexes": [],
+  "indexes": [
+    {
+      "collectionGroup": "mediciones",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "sensorId", "order": "ASCENDING" },
+        { "fieldPath": "periodoInicio", "order": "DESCENDING" }
+      ]
+    }
+  ],
   "fieldOverrides": [
     {
       "collectionGroup": "miembros",

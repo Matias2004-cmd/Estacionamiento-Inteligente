@@ -28,3 +28,5 @@ firestore-backup*.json
 # Informe (se entrega por Canvas, no va en el repositorio)
 Informe_*.docx
 capturas/
+presentacion/
+presentacion_overleaf.zip

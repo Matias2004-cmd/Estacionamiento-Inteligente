@@ -89,31 +89,30 @@ docs/                    Bitácora de recolección
 organizaciones/{organizacionId}
   ├─ nombre, creadaEn
   ├─ miembros/{uid}            uid, email, role: "admin" | "operator"
-  ├─ dispositivos/{dispositivoId}
-  │     nombre, tipo, activo, publicarEnDemo, configuracion{...},
-  │     ultimoContacto, ultimaMedicion{...}
-  └─ mediciones/{dispositivoId}__{dispositivoId}_{epochMinuto}
-        sensorId, periodoInicio, estado, distanciaCm, distanciaMinCm,
-        distanciaMaxCm, muestras, deteccionesIr, timestamp
+  └─ dispositivos/{dispositivoId}
+        nombre, tipo, activo, publicarEnDemo, configuracion{...},
+        ultimoContacto, ultimaMedicion{...}
 credencialesDispositivo/{sha256(token)}   organizacionId, dispositivoId, revoked
-mediciones/{id}                           copia pública opcional para la demo
+mediciones/{dispositivoId}_{epochMinuto}  todas las mediciones (panel público y privado)
+  sensorId, periodoInicio, estado, distanciaCm, distanciaMinCm,
+  distanciaMaxCm, muestras, deteccionesIr, timestamp
 ```
 
 | Decisión | Justificación |
 | --- | --- |
 | Un documento **por minuto** con promedio, mínimo, máximo y conteos | 1.440 escrituras/día por dispositivo en vez de 17.280 (una por lectura cada 5 s) |
 | ID determinista `dispositivo_minuto` | Los reintentos sobrescriben el mismo documento: **sin duplicados** |
-| Subcolección por organización | Aislamiento natural en Security Rules y consultas acotadas a una organización |
+| Una sola colección `mediciones` | Mismo formato e ID que la recolección de 7 días y una sola escritura por minuto; cada organización ve las mediciones de sus dispositivos (`sensorId in [...]`) |
 | `ultimaMedicion` dentro del dispositivo | El estado actual se obtiene leyendo 1 documento |
 | Credencial guardada como hash SHA-256 | Si se filtra la base no se filtran los tokens; revocar = `revoked: true` |
-| Índices solo en `periodoInicio` y `sensorId` | Son los únicos campos consultados; el resto está exento ([firestore.indexes.json](firestore.indexes.json)) y reduce ~70 % el almacenamiento |
+| Índices solo en `periodoInicio` y `sensorId` | Son los únicos campos consultados (más el compuesto `sensorId + periodoInicio`); el resto está exento ([firestore.indexes.json](firestore.indexes.json)) y reduce ~70 % el almacenamiento |
 
 Consultas que realiza la plataforma:
 
 | Consulta | Índice |
 | --- | --- |
-| Mediciones de la organización ordenadas por `periodoInicio desc`, `limit 100` (tiempo real) | Simple automático en `periodoInicio` |
-| Histórico por rango `periodoInicio >= desde AND <= hasta`, paginado con cursor | Simple automático en `periodoInicio` |
+| Panel público: mediciones ordenadas por `periodoInicio desc` e histórico por rango, paginado con cursor | Simple automático en `periodoInicio` |
+| Panel privado: `where("sensorId", "in", dispositivosDeLaOrganizacion)` ordenado por `periodoInicio desc`, `limit 100` (tiempo real) e histórico por rango | Compuesto `sensorId ASC + periodoInicio DESC` |
 | Organizaciones de un usuario: `collectionGroup("miembros").where("uid", "==", uid)` | Simple con alcance de grupo de colecciones (definido en `fieldOverrides`) |
 | Credenciales de un dispositivo: `where("dispositivoId", "==", id)` | Simple automático |
 
@@ -125,9 +124,9 @@ errores tienen la forma `{"error": "mensaje"}`.
 | Método y ruta | Autenticación | Función |
 | --- | --- | --- |
 | `GET /api/configuracion-publica` | Pública | Configuración web de Firebase (clave pública del cliente) |
-| `GET /api/mediciones?limit&from&to&cursor` | Pública | Página de la colección de demostración (caché 60 s en el edge) |
-| `GET /api/mediciones?scope=organizacion&organizacion=<id>&...` | ID token + miembro | Histórico paginado de la organización |
-| `POST /api/mediciones` | Token del dispositivo | Guarda 1–100 agregados validados en su organización |
+| `GET /api/mediciones?limit&from&to&cursor` | Pública | Página de todas las mediciones (caché 60 s en el edge) |
+| `GET /api/mediciones?scope=organizacion&organizacion=<id>&...` | ID token + miembro | Histórico paginado de los dispositivos de la organización |
+| `POST /api/mediciones` | Token del dispositivo | Guarda 1–100 agregados validados en la colección `mediciones` |
 | `GET /api/configuracion-dispositivo` | Token del dispositivo | Configuración vigente del dispositivo |
 | `GET /api/sesion` | ID token | Organizaciones y rol del usuario |
 | `POST /api/iniciar-organizacion` | ID token del admin inicial | Crea la primera organización (variables `BOOTSTRAP_*`) |
@@ -145,7 +144,7 @@ curl -X POST https://solemne-1-ti.vercel.app/api/mediciones \
        "periodoInicio":"2026-10-23T19:00:00Z","distanciaCm":12.4,"distanciaMinCm":11.9,
        "distanciaMaxCm":13.0,"muestras":12,"deteccionesIr":1,
        "estado":"OCUPADO"}]}'
-# 201 {"ids":["raspberry-pi-1__raspberry-pi-1_1792782000"],"saved":true,"count":1,"scope":"organizacion"}
+# 201 {"ids":["raspberry-pi-1_1792782000"],"saved":true,"count":1,"scope":"mediciones"}
 
 # Configuración vigente del dispositivo
 curl https://solemne-1-ti.vercel.app/api/configuracion-dispositivo -H "Authorization: Bearer $TOKEN_DISPOSITIVO"
@@ -181,8 +180,10 @@ superar el intervalo + 360 s para no alertar durante el envío por lotes.
 - En la Pi el token es un secreto de Docker montado en `/run/secrets`, fuera del
   código y de la imagen.
 - **Security Rules** ([firestore.rules](firestore.rules)): el navegador no puede
-  escribir; solo lee los datos de organizaciones donde es miembro con rol
-  `admin` u `operator` y correo verificado.
+  escribir; solo lee los dispositivos de organizaciones donde es miembro con rol
+  `admin` u `operator` y correo verificado. La colección `mediciones` es de
+  lectura pública; el panel privado muestra solo las de los dispositivos de la
+  organización.
 - Roles: `admin` administra organizaciones, dispositivos y usuarios; `operator`
   consulta dashboard, históricos y alertas.
 
